@@ -92,9 +92,8 @@ def translate_readme(client, model, text):
     """请求模型翻译 README.md 为中文"""
     prompt = f"""
     将以下开源项目的 README 翻译成中文。请保持原有的 Markdown 格式。
-    
     以下为原文：
-    {text[:10000]}  # 避免超过上下文
+    {text}
     """
     try:
         response = client.chat.completions.create(
@@ -121,7 +120,7 @@ def process_files():
     print("\n--- 开始分析 PDF 论文 ---")
     pdf_files = glob.glob(os.path.join(TARGET_DIR, "**", "*.pdf"), recursive=True)
     if not pdf_files:
-        print("今日目录下没有找到任何 PDF 文件。")
+        print("没有找到 PDF 文件。")
     
     for pdf_path in pdf_files:
         md_path = pdf_path.replace(".pdf", "_summary.md")
