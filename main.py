@@ -169,11 +169,6 @@ def download_huggingface_daily_papers():
     url = f"https://huggingface.co/api/daily_papers?date={TODAY}"
     try:
         response = session.get(url, timeout=15)
-        if response.status_code in [404, 400]:
-            print(f"  [!] 今天 ({TODAY}) 的数据可能尚未生成或不存在，获取最新一期的摘要...")
-            url = "https://huggingface.co/api/daily_papers"
-            response = session.get(url, timeout=15)
-            
         response.raise_for_status()
         papers = response.json()
         
