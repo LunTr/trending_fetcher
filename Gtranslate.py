@@ -1,5 +1,6 @@
 import time
 import random
+import urllib.request
 import requests
 import certifi
 from requests import Session
@@ -8,6 +9,10 @@ from requests.exceptions import SSLError, Timeout, ConnectionError, HTTPError
 TRANSLATE_URL = "https://translate.googleapis.com/translate_a/single"
 
 session = Session()
+session.trust_env = True
+system_proxies = urllib.request.getproxies()
+if system_proxies:
+    session.proxies.update(system_proxies)
 session.headers.update({
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
