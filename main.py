@@ -255,7 +255,7 @@ def download_huggingface_daily_papers():
         unique_papers = [p for p in papers_sorted if is_new_paper(p)]
         selected = unique_papers[:HF_DAILY_LIMIT]
         print(
-            f"找到 {len(papers)} 篇 Daily Papers，去重后 {len(unique_papers)} 篇，"
+            f"去重后 {len(unique_papers)} 篇Daily Papers，"
             f"按上升数取前 {len(selected)} 篇。"
         )
 
