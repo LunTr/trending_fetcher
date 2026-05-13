@@ -34,6 +34,9 @@ session.headers.update({
 
 TODAY = datetime.datetime.now().strftime('%Y-%m-%d')
 DOWNLOADED_ARXIV_IDS = set()
+ARXIV_HISTORY_FILE = "downloaded_arxiv_history.txt"
+HF_DAILY_LIMIT = 20
+SCAN_SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules"}
 
 # GitHub 历史记录文件
 GITHUB_HISTORY_FILE = "downloaded_github_history.txt"
@@ -55,6 +58,53 @@ def create_dir(dir_name):
 def sanitize_filename(filename):
     valid_chars = f"-_.() {string.ascii_letters}{string.digits}"
     return ''.join(c for c in filename if c in valid_chars)[:150]
+
+def extract_arxiv_id_from_name(name):
+    match = re.search(r"(\d{4}\.\d{4,5})(v\d+)?", name)
+    if not match:
+        return None
+    return f"{match.group(1)}{match.group(2) or ''}"
+
+def scan_workspace_arxiv_ids(base_dir):
+    found = set()
+    for root, dirs, files in os.walk(base_dir):
+        dirs[:] = [d for d in dirs if d not in SCAN_SKIP_DIRS]
+        for fname in files:
+            if not (fname.endswith(".pdf") or fname.endswith("_summary.md")):
+                continue
+            arxiv_id = extract_arxiv_id_from_name(fname)
+            if arxiv_id:
+                found.add(arxiv_id)
+    return found
+
+def load_arxiv_history(base_dir):
+    ids = set()
+    if os.path.exists(ARXIV_HISTORY_FILE):
+        with open(ARXIV_HISTORY_FILE, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    ids.add(line)
+
+    scanned_ids = scan_workspace_arxiv_ids(base_dir)
+    missing = scanned_ids - ids
+    if missing:
+        mode = 'a' if os.path.exists(ARXIV_HISTORY_FILE) else 'w'
+        with open(ARXIV_HISTORY_FILE, mode, encoding='utf-8') as f:
+            for arxiv_id in sorted(missing):
+                f.write(f"{arxiv_id}\n")
+    ids.update(scanned_ids)
+
+    return ids
+
+def record_arxiv_id(arxiv_id):
+    if not arxiv_id or arxiv_id in DOWNLOADED_ARXIV_IDS:
+        return
+    DOWNLOADED_ARXIV_IDS.add(arxiv_id)
+    with open(ARXIV_HISTORY_FILE, 'a', encoding='utf-8') as f:
+        f.write(f"{arxiv_id}\n")
+
+DOWNLOADED_ARXIV_IDS.update(load_arxiv_history(os.getcwd()))
 
 def download_github_trending():
     print("开始抓取 GitHub Trending 前5项目...")
@@ -152,6 +202,11 @@ def download_arxiv_pdf(arxiv_id, title, dir_path):
     pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
     safe_title = sanitize_filename(title)
     file_path = os.path.join(dir_path, f"{safe_title}_{arxiv_id}.pdf")
+
+    if os.path.exists(file_path):
+        print(f"  [-] PDF 已存在，跳过: {arxiv_id}")
+        record_arxiv_id(arxiv_id)
+        return False
     
     try:
         print(f"  [+] 正在下载 PDF: {arxiv_id} ...")
@@ -160,7 +215,7 @@ def download_arxiv_pdf(arxiv_id, title, dir_path):
         with open(file_path, 'wb') as f:
             for chunk in res.iter_content(chunk_size=8192):
                 f.write(chunk)
-        DOWNLOADED_ARXIV_IDS.add(arxiv_id)
+        record_arxiv_id(arxiv_id)
         return True
     except Exception as e:
         print(f"  [!] 下载失败 {arxiv_id}: {e}")
@@ -175,9 +230,36 @@ def download_huggingface_daily_papers():
         response = session.get(url, timeout=15)
         response.raise_for_status()
         papers = response.json()
-        
-        print(f"找到 {len(papers)} 篇 Daily Papers。")
-        for p in papers:
+        if not isinstance(papers, list):
+            print("Daily Papers 返回格式异常，无法解析。")
+            return
+
+        def get_rise_score(item):
+            for key in ("upvotes", "upvoteCount", "upvote_count", "votes", "score", "trend", "trend_score", "rise"):
+                value = item.get(key)
+                if isinstance(value, (int, float)):
+                    return value
+            paper = item.get('paper', {})
+            for key in ("upvotes", "upvoteCount", "upvote_count", "votes", "score", "trend", "trend_score", "rise"):
+                value = paper.get(key)
+                if isinstance(value, (int, float)):
+                    return value
+            return 0
+
+        papers_sorted = sorted(papers, key=get_rise_score, reverse=True)
+        def is_new_paper(item):
+            paper = item.get('paper', {})
+            arxiv_id = paper.get('id', '')
+            return bool(arxiv_id) and arxiv_id not in DOWNLOADED_ARXIV_IDS
+
+        unique_papers = [p for p in papers_sorted if is_new_paper(p)]
+        selected = unique_papers[:HF_DAILY_LIMIT]
+        print(
+            f"找到 {len(papers)} 篇 Daily Papers，去重后 {len(unique_papers)} 篇，"
+            f"按上升数取前 {len(selected)} 篇。"
+        )
+
+        for p in selected:
             paper_info = p.get('paper', {})
             title = paper_info.get('title', 'Unknown')
             arxiv_id = paper_info.get('id', '')
