@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 import string
 import re
 import urllib3
+import json
 
 # 禁用安全请求警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -34,9 +35,8 @@ session.headers.update({
 
 TODAY = datetime.datetime.now().strftime('%Y-%m-%d')
 DOWNLOADED_ARXIV_IDS = set()
-ARXIV_HISTORY_FILE = "downloaded_arxiv_history.txt"
+ARXIV_HISTORY_FILE = "downloaded_arxiv_history.json"
 HF_DAILY_LIMIT = 20
-SCAN_SKIP_DIRS = {".git", "__pycache__", ".venv", "venv", "node_modules"}
 
 # GitHub 历史记录文件
 GITHUB_HISTORY_FILE = "downloaded_github_history.txt"
@@ -65,46 +65,32 @@ def extract_arxiv_id_from_name(name):
         return None
     return f"{match.group(1)}{match.group(2) or ''}"
 
-def scan_workspace_arxiv_ids(base_dir):
-    found = set()
-    for root, dirs, files in os.walk(base_dir):
-        dirs[:] = [d for d in dirs if d not in SCAN_SKIP_DIRS]
-        for fname in files:
-            if not (fname.endswith(".pdf") or fname.endswith("_summary.md")):
-                continue
-            arxiv_id = extract_arxiv_id_from_name(fname)
-            if arxiv_id:
-                found.add(arxiv_id)
-    return found
-
-def load_arxiv_history(base_dir):
-    ids = set()
-    if os.path.exists(ARXIV_HISTORY_FILE):
+def load_arxiv_history():
+    if not os.path.exists(ARXIV_HISTORY_FILE):
+        return {}
+    try:
         with open(ARXIV_HISTORY_FILE, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    ids.add(line)
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
-    scanned_ids = scan_workspace_arxiv_ids(base_dir)
-    missing = scanned_ids - ids
-    if missing:
-        mode = 'a' if os.path.exists(ARXIV_HISTORY_FILE) else 'w'
-        with open(ARXIV_HISTORY_FILE, mode, encoding='utf-8') as f:
-            for arxiv_id in sorted(missing):
-                f.write(f"{arxiv_id}\n")
-    ids.update(scanned_ids)
+def save_arxiv_history(history):
+    with open(ARXIV_HISTORY_FILE, 'w', encoding='utf-8') as f:
+        json.dump(history, f, ensure_ascii=False, indent=2, sort_keys=True)
 
-    return ids
-
-def record_arxiv_id(arxiv_id):
-    if not arxiv_id or arxiv_id in DOWNLOADED_ARXIV_IDS:
+def record_arxiv_id(arxiv_id, date_str=None):
+    if not arxiv_id:
         return
+    date_str = date_str or TODAY
+    existing_date = ARXIV_HISTORY.get(arxiv_id)
+    if not existing_date or date_str > existing_date:
+        ARXIV_HISTORY[arxiv_id] = date_str
+        save_arxiv_history(ARXIV_HISTORY)
     DOWNLOADED_ARXIV_IDS.add(arxiv_id)
-    with open(ARXIV_HISTORY_FILE, 'a', encoding='utf-8') as f:
-        f.write(f"{arxiv_id}\n")
 
-DOWNLOADED_ARXIV_IDS.update(load_arxiv_history(os.getcwd()))
+ARXIV_HISTORY = load_arxiv_history()
+DOWNLOADED_ARXIV_IDS.update(ARXIV_HISTORY.keys())
 
 def download_github_trending():
     print("开始抓取 GitHub Trending 前5项目...")
