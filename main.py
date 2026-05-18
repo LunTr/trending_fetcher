@@ -259,6 +259,15 @@ def download_huggingface_daily_papers():
 if __name__ == "__main__":
     print(f"正在使用的系统代理配置: {system_proxies}\n")
     
+    print("更新 arXiv 下载历史记录...")
+    import update_arxiv_history
+    update_arxiv_history.main()
+    
+    # 重新加载更新后的历史记录
+    global ARXIV_HISTORY
+    ARXIV_HISTORY = load_arxiv_history()
+    DOWNLOADED_ARXIV_IDS.update(ARXIV_HISTORY.keys())
+    
     download_github_trending()
     download_huggingface_daily_papers()
     
