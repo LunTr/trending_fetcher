@@ -264,7 +264,6 @@ if __name__ == "__main__":
     update_arxiv_history.main()
     
     # 重新加载更新后的历史记录
-    global ARXIV_HISTORY
     ARXIV_HISTORY = load_arxiv_history()
     DOWNLOADED_ARXIV_IDS.update(ARXIV_HISTORY.keys())
     
