@@ -37,32 +37,46 @@ def read_text_file(file_path):
         print(e)
         return ""
 
-def load_apis():
+def load_summary_models():
     with open(API_KEY_PATH, 'r', encoding='utf-8') as f:
-        return json.load(f)
+        api_config = json.load(f)
+    if isinstance(api_config, dict):
+        return api_config.get("Summary_Models", [])
+    return api_config
+
+
+def get_model_name(api_conf):
+    return api_conf.get("Model") or api_conf.get("Summary_Model")
 
 def test_api_connection(api_conf):
     try:
+        model_name = get_model_name(api_conf)
+        if not model_name:
+            print("[!] Summary 模型名缺失，跳过该配置。")
+            return None, None
         client = OpenAI(
             api_key=api_conf["API_KEY"],
             base_url=api_conf["Base_URL"]
         )
         response = client.chat.completions.create(
-            model=api_conf["Model"],
+            model=model_name,
             messages=[{"role": "user", "content": "hello"}],
             max_tokens=5,
             timeout=10
         )
-        print(f"[*] 成功连接到模型: {api_conf['Model']}")
-        return client, api_conf["Model"]
+        print(f"[*] 成功连接到模型: {model_name}")
+        return client, model_name
     except Exception as e:
         print(e)
         return None, None
 
 def get_working_client():
-    apis = load_apis()
+    apis = load_summary_models()
+    if not apis:
+        raise Exception("Summary_Models 为空或未配置。")
     for api_conf in apis:
-        print(f"正在测试 API: {api_conf['Model']} ...")
+        model_name = get_model_name(api_conf) or "<missing-model>"
+        print(f"正在测试 API: {model_name} ...")
         client, model = test_api_connection(api_conf)
         if client:
             return client, model
