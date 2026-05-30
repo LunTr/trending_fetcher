@@ -18,7 +18,9 @@ def load_prompts():
 
 
 def render_prompt(template, **kwargs):
-    rendered = template
+    rendered = template or ""
+    if isinstance(rendered, list):
+        rendered = "\n".join(rendered)
     for key, value in kwargs.items():
         rendered = rendered.replace(f"{{{key}}}", value)
     return rendered
