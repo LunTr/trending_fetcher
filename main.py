@@ -271,3 +271,9 @@ if __name__ == "__main__":
     download_huggingface_daily_papers()
     
     print("所有抓取与下载任务执行完毕！")
+    try:
+        import createbase
+        print("Starting offline KB build...")
+        createbase.build_kb()
+    except Exception as e:
+        print(f"[!] KB build skipped: {e}")

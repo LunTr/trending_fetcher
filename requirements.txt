@@ -3,3 +3,7 @@ openai
 PyMuPDF
 requests
 urllib3
+numpy
+faiss-cpu
+python-docx
+certifi
