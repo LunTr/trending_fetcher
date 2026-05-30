@@ -23,6 +23,21 @@ DEFAULT_API_KEY_PATH = os.path.abspath(
 )
 
 
+def remove_corrupt_file(file_path, reason=None):
+    base_name = os.path.basename(file_path)
+    if not os.path.exists(file_path):
+        print(f"[!] Corrupt file missing, skipped: {base_name}")
+        return
+    try:
+        os.remove(file_path)
+        print(f"[!] Corrupt file deleted: {base_name}")
+    except Exception as exc:
+        if reason:
+            print(f"[!] Failed to delete corrupt file: {base_name} ({reason}) ({exc})")
+        else:
+            print(f"[!] Failed to delete corrupt file: {base_name} ({exc})")
+
+
 def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=DEFAULT_API_KEY_PATH, rebuild=False):
     try:
         import numpy as np
@@ -245,7 +260,14 @@ def iter_paper_files(source_dir):
 
 def extract_text_and_meta(file_path):
     ext = os.path.splitext(file_path)[1].lower()
-    stat = os.stat(file_path)
+    if ext == ".doc":
+        print(f"[!] Unsupported .doc file skipped: {os.path.basename(file_path)}")
+        return "", {}
+    try:
+        stat = os.stat(file_path)
+    except Exception as exc:
+        remove_corrupt_file(file_path, f"stat failed: {exc}")
+        return "", {}
     doc_id = hash_doc_id(file_path, stat.st_size, stat.st_mtime)
     date_tag = find_date_in_path(file_path)
     year = date_tag.split("-")[0] if date_tag else ""
@@ -265,7 +287,7 @@ def extract_text_and_meta(file_path):
         metadata["authors"] = pdf_meta.get("author") or ""
         return text, metadata
 
-    if ext in {".doc", ".docx"}:
+    if ext == ".docx":
         text = extract_docx_text(file_path)
         metadata["title"] = derive_title_from_text(text) or derive_title_from_filename(file_path)
         return text, metadata
@@ -276,6 +298,7 @@ def extract_text_and_meta(file_path):
 
 
 def extract_pdf_text(file_path):
+    doc = None
     try:
         with suppress_mupdf_errors():
             doc = fitz.open(file_path)
@@ -286,15 +309,25 @@ def extract_pdf_text(file_path):
                     pages.append(extract_page_text(page))
                 except Exception:
                     continue
-            doc.close()
         return "\n\n".join(pages), meta
-    except Exception as e:
-        print(f"[!] PDF parse failed, skipped: {os.path.basename(file_path)} ({e})")
+    except Exception as exc:
+        remove_corrupt_file(file_path, f"pdf parse failed: {exc}")
         return "", {}
+    finally:
+        if doc is not None:
+            with contextlib.suppress(Exception):
+                doc.close()
 
 
 @contextlib.contextmanager
 def suppress_mupdf_errors():
+    tools = getattr(fitz, "TOOLS", None)
+    if tools:
+        for name in ("mupdf_display_errors", "mupdf_display_warnings"):
+            func = getattr(tools, name, None)
+            if callable(func):
+                with contextlib.suppress(Exception):
+                    func(False)
     with open(os.devnull, "w") as devnull:
         with contextlib.redirect_stderr(devnull):
             yield
@@ -331,7 +364,11 @@ def extract_docx_text(file_path):
         print("[!] Missing dependency: python-docx. Skipping docx file.")
         return ""
 
-    doc = Document(file_path)
+    try:
+        doc = Document(file_path)
+    except Exception as exc:
+        remove_corrupt_file(file_path, f"docx parse failed: {exc}")
+        return ""
     parts = []
     for para in doc.paragraphs:
         text = para.text.strip()
@@ -345,9 +382,16 @@ def read_text_file(file_path):
     try:
         with open(file_path, "r", encoding="utf-8") as f:
             return f.read()
-    except Exception:
-        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-            return f.read()
+    except UnicodeDecodeError:
+        try:
+            with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+        except Exception as exc:
+            remove_corrupt_file(file_path, f"text read failed: {exc}")
+            return ""
+    except Exception as exc:
+        remove_corrupt_file(file_path, f"text read failed: {exc}")
+        return ""
 
 
 def split_sections(text):
