@@ -3,6 +3,8 @@ import requests
 import urllib3
 from openai import OpenAI
 
+from prompt_store import load_prompts, render_prompt
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 SYSTEM_PROXIES = urllib.request.getproxies()
 
@@ -18,6 +20,7 @@ HTTP_SESSION.headers.update({
 API_KEY_PATH = r"e:\DL\EssaysHere\API_KEY.json"
 TODAY = datetime.datetime.now().strftime('%Y-%m-%d')
 TARGET_DIR = os.path.join(os.getcwd(), TODAY)
+PROMPTS = load_prompts()
 
 
 def call_chat(client, model, system_prompt, user_prompt, temperature=0.3, timeout=180):
@@ -60,7 +63,7 @@ def test_api_connection(api_conf):
         )
         client.chat.completions.create(
             model=model_name,
-            messages=[{"role": "user", "content": "hello"}],
+            messages=[{"role": "user", "content": PROMPTS["test_api_connection"]["user"]}],
             max_tokens=5,
             timeout=10
         )
@@ -183,20 +186,13 @@ def choose_best_llm_paper(client, model, candidates):
             f"ID: {c['id']}\nTitle: {c['title']}\nSummary:\n{short_summary}\n"
         )
 
-    prompt = (
-        "你需要从候选中选出在大语言模型(LLM)方面最有意思、最有潜力的一篇。\n"
-        "要求：\n"
-        "1) 必须从候选 ID 中选一个。\n"
-        "2) 如果都不是 LLM 方向，也要选最接近的一篇。\n"
-        "3) 只输出 JSON，不要多余文字。\n"
-        "输出格式: {\"id\":\"...\", \"reason\":\"...\"}\n\n"
-        "候选：\n" + "\n".join(items)
-    )
+    prompt_conf = PROMPTS["select_llm_paper"]
+    prompt = render_prompt(prompt_conf["user_template"], items="\n".join(items))
 
     raw = call_chat(
         client,
         model,
-        "你是一位资深AI研究员，擅长筛选最有潜力或者你觉得有意思的LLM论文。",
+        prompt_conf["system"],
         prompt,
         0.2,
         180

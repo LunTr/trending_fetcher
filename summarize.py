@@ -7,12 +7,14 @@ import fitz  # PyMuPDF
 from openai import OpenAI
 
 from Gtranslate import translate_large
+from prompt_store import load_prompts, render_prompt
 
 API_KEY_PATH = r"e:\DL\EssaysHere\API_KEY.json"
 TODAY = datetime.datetime.now().strftime('%Y-%m-%d')
 TARGET_DIR = os.path.join(os.getcwd(), TODAY)
 
 README_CONTEXT_LIMIT_CHARS = 100_000
+PROMPTS = load_prompts()
 
 def call_chat(client, model, system_prompt, user_prompt, temperature=0.3, timeout=180):
     try:
@@ -60,7 +62,7 @@ def test_api_connection(api_conf):
         )
         response = client.chat.completions.create(
             model=model_name,
-            messages=[{"role": "user", "content": "hello"}],
+            messages=[{"role": "user", "content": PROMPTS["test_api_connection"]["user"]}],
             max_tokens=5,
             timeout=10
         )
@@ -95,16 +97,9 @@ def extract_text_from_pdf(pdf_path, max_pages=3):
         return ""
 
 def summarize_paper(client, model, text):
-    prompt = (
-        "你是一位 INTJ 型人格的AI研究员，阅读以下学术论文，完整翻译Abstract，并生成结构化中文摘要。\n"
-        "沟通直接、简洁，避免空泛鼓励和情绪化，不要过多使用关联词。\n\n"
-        "请使用Markdown格式，包含以下必填内容：\n"
-        "1. **论文核心目标/问题**：(解决什么问题)\n"
-        "2. **主要创新点/方法**：(提出了什么新方法)\n"
-        "3. **潜在价值与应用场景**：(有什么用)\n\n"
-        f"论文文本如下：\n{text}"
-    )
-    return call_chat(client, model, "你是一位专业的AI科研人员。", prompt, 0.3, 180)
+    prompt_conf = PROMPTS["summarize_paper"]
+    prompt = render_prompt(prompt_conf["user_template"], text=text)
+    return call_chat(client, model, prompt_conf["system"], prompt, 0.3, 180)
 
 def truncate_readme_text(text, max_chars=README_CONTEXT_LIMIT_CHARS):
     text = text.strip()
@@ -117,8 +112,9 @@ def truncate_readme_text(text, max_chars=README_CONTEXT_LIMIT_CHARS):
 
 def translate_readme(client, model, text):
     limited_text = truncate_readme_text(text, README_CONTEXT_LIMIT_CHARS)
-    prompt = "将以下开源项目的 README 翻译成中文，保持原有 Markdown 格式。\n原文：\n" + limited_text
-    return call_chat(client, model, "你是一位专业的开源项目翻译员。", prompt, 0.3, 180)
+    prompt_conf = PROMPTS["translate_readme"]
+    prompt = render_prompt(prompt_conf["user_template"], text=limited_text)
+    return call_chat(client, model, prompt_conf["system"], prompt, 0.3, 180)
 
 def process_files():
     if not os.path.exists(TARGET_DIR):
