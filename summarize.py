@@ -97,9 +97,28 @@ def extract_text_from_pdf(pdf_path, max_pages=3):
         return ""
 
 def summarize_paper(client, model, text):
-    prompt_conf = PROMPTS["summarize_paper"]
-    prompt = render_prompt(prompt_conf["user_template"], text=text)
-    return call_chat(client, model, prompt_conf["system"], prompt, 0.3, 180)
+    abstract_conf = PROMPTS["summarize_paper_abstract"]
+    abstract_prompt = render_prompt(abstract_conf["user_template"], text=text)
+    abstract_translation = call_chat(client, model, abstract_conf["system"], abstract_prompt, 0.3, 180)
+    if not abstract_translation or not abstract_translation.strip():
+        return None
+
+    structured_conf = PROMPTS["summarize_paper_structured"]
+    structured_prompt = render_prompt(
+        structured_conf["user_template"],
+        text=text,
+        abstract_translation=abstract_translation.strip()
+    )
+    structured_summary = call_chat(client, model, structured_conf["system"], structured_prompt, 0.3, 180)
+    if not structured_summary or not structured_summary.strip():
+        return None
+
+    return (
+        "# 摘要译文\n"
+        f"{abstract_translation.strip()}\n\n"
+        "# 结构化摘要\n"
+        f"{structured_summary.strip()}"
+    )
 
 def truncate_readme_text(text, max_chars=README_CONTEXT_LIMIT_CHARS):
     text = text.strip()
