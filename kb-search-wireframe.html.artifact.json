@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "kind": "html",
+  "title": "KB Search — 查询界面线框 (Wireframe)",
+  "entry": "kb-search-wireframe.html",
+  "renderer": "html",
+  "status": "complete",
+  "exports": [
+    "html",
+    "pdf",
+    "zip"
+  ],
+  "createdAt": "2026-06-01T13:27:00.605Z",
+  "updatedAt": "2026-06-01T13:27:00.614Z",
+  "metadata": {
+    "identifier": "kb-search-wireframe",
+    "artifactType": "text/html",
+    "inferred": false
+  }
+}
