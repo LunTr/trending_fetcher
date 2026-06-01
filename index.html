@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>KB Search · 线框 Wireframe</title>
+<title>KB Search</title>
 <style>
   :root{
     --bg:oklch(96.5% 0.004 250);
@@ -40,8 +40,10 @@
   .glyph::after{content:"";width:9px;height:9px;background:var(--accent)}
   .brand b{font-weight:650;letter-spacing:-.01em}
   .brand .label{margin-left:2px}
-  .wftag{margin-left:auto;border:1px dashed var(--accent-ink);color:var(--accent-ink);
-    padding:3px 9px;border-radius:99px;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em}
+  .conn{margin-left:auto;border:1px solid var(--border);padding:3px 11px;border-radius:99px;
+    font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--faint)}
+  .conn.on{color:var(--accent-ink);border-color:var(--accent)}
+  .conn.off{color:oklch(50% 0.16 25);border-color:oklch(80% 0.09 25)}
   .kbstat{display:flex;gap:16px;flex-wrap:wrap}
   .kbstat div{display:flex;flex-direction:column;gap:2px}
   .kbstat .v{font-family:var(--mono);font-size:13px;color:var(--muted)}
@@ -118,7 +120,8 @@
   .meta span i{font-family:var(--mono);font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);font-style:normal}
   .pill{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;border:1px solid var(--border);
     border-radius:3px;padding:2px 7px;color:var(--muted)}
-  .snip{color:var(--muted);font-size:13.5px;line-height:1.55}
+  .snip{color:var(--muted);font-size:13.5px;line-height:1.55;overflow-wrap:anywhere}
+  .snip mark{background:var(--accent-wash);color:var(--accent-ink);padding:0 1px;border-radius:2px}
   .snip .bars{display:grid;gap:6px}
   .bar{height:9px;background:var(--block);border-radius:3px}
   .path{margin-top:10px;font-family:var(--mono);font-size:11.5px;color:var(--faint);
@@ -151,32 +154,30 @@
 <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
 <script type="text/babel">
-const { useState } = React;
+const { useState, useEffect } = React;
 
-// --- mock results: shape mirrors search.py {rank, score, record{...}} ---
+const API = "http://127.0.0.1:8000";   // front-back: backend = kb_server.py
+
 const MODE_DESC = {
   auto: "向量检索，embed 失败时自动降级到关键词",
   vector: "纯向量检索（FAISS 余弦相似度，0–1）",
   keyword: "关键词命中计数，无需 embedding 模型",
 };
-const MOCK = [
-  { rank:1, score:0.8421, record:{ title:"Scaling Agentic Reasoning with Tool-Use Curricula",
-    file_name:"scaling_agentic_2509.12345.pdf", file_type:"pdf", date:"2026-05-30",
-    section_title:"Method", chunk_index:3, chunk_total:18,
-    source_path:"2026-05-30/HuggingFace/Scaling Agentic_2509.12345.pdf" } },
-  { rank:2, score:0.7993, record:{ title:"awesome-llm-agents", file_name:"README.md", file_type:"md",
-    date:"2026-05-30", section_title:"Frameworks", chunk_index:0, chunk_total:6,
-    source_path:"2026-05-30/GitHub/awesome-llm-agents/README.md" } },
-  { rank:3, score:0.7610, record:{ title:"Retrieval-Augmented Planning for Long-Horizon Tasks",
-    file_name:"rag_planning_2510.00921.pdf", file_type:"pdf", date:"2026-05-29",
-    section_title:"Experiments", chunk_index:7, chunk_total:22,
-    source_path:"2026-05-29/HuggingFace/RAG Planning_2510.00921.pdf" } },
-  { rank:4, score:0.7188, record:{ title:"vllm-router", file_name:"README_zh.md", file_type:"md",
-    date:"2026-05-29", section_title:"快速开始", chunk_index:1, chunk_total:4,
-    source_path:"2026-05-29/GitHub/vllm-router/README_zh.md" } },
-];
 
-function sourceOf(p){ return /\/GitHub\//.test(p) ? "GitHub" : /\/HuggingFace\//.test(p) ? "HuggingFace" : "—"; }
+// source_path is an absolute Windows path → match either separator
+function sourceOf(p){ return /[\\/]GitHub[\\/]/.test(p) ? "GitHub" : /[\\/]HuggingFace[\\/]/.test(p) ? "HuggingFace" : "—"; }
+
+const esc = (s) => s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+// render snippet text with keyword hits highlighted
+function highlight(text, keywords){
+  let html = esc(text || "");
+  const ks = keywords.map(k=>k.trim()).filter(Boolean)
+    .sort((a,b)=>b.length-a.length).map(k=>k.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"));
+  if(ks.length){
+    html = html.replace(new RegExp("("+ks.join("|")+")","gi"), "<mark>$1</mark>");
+  }
+  return {__html: html};
+}
 
 // derive what a card can open from its source_path:
 // HuggingFace 论文_id.pdf  ↔  论文_id_summary.md (摘要译文)
@@ -193,13 +194,14 @@ function openTargets(p){
   }
   return [{label:"打开",path:p}];
 }
-const openPath = (p) => window.open("/open?path=" + encodeURIComponent(p), "_blank");
+const openPath = (p) => window.open(API + "/open?path=" + encodeURIComponent(p), "_blank");
 
-function Card({ item, mode }){
+function Card({ item, mode, keywords }){
   const r = item.record;
   const targets = openTargets(r.source_path);
   const scoreLabel = mode === "keyword" ? "hits" : "cosine";
   const scoreText = mode === "keyword" ? String(Math.round(item.score)) : item.score.toFixed(3);
+  const snippet = item.snippet || r.text || "";
   return (
     <div className="card" onClick={()=>openPath(targets[0].path)} title={"打开 " + targets[0].label}>
       <div className="rank mono">#{item.rank}</div>
@@ -212,14 +214,7 @@ function Card({ item, mode }){
           <span><i>chunk</i><b className="mono">{r.chunk_index}/{r.chunk_total}</b></span>
           <span className="pill">{sourceOf(r.source_path)}</span>
         </div>
-        <div className="snip">
-          <span className="label" style={{display:"block",marginBottom:6}}>snippet · clean_snippet(text)</span>
-          <div className="bars">
-            <div className="bar" style={{width:"96%"}}></div>
-            <div className="bar" style={{width:"88%"}}></div>
-            <div className="bar" style={{width:"61%"}}></div>
-          </div>
-        </div>
+        <div className="snip" dangerouslySetInnerHTML={highlight(snippet, keywords)}></div>
         <div className="path">{r.source_path}</div>
       </div>
       <div className="cside">
@@ -242,6 +237,16 @@ function App(){
   const [topK, setTopK] = useState(10);
   const [results, setResults] = useState(null); // null = not searched yet
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [meta, setMeta] = useState(null);       // {embedding_model, dimension, total_vectors}
+  const [online, setOnline] = useState(null);    // null=checking, true/false
+
+  useEffect(()=>{
+    fetch(API + "/meta")
+      .then(r=>r.json())
+      .then(m=>{ setMeta(m); setOnline(true); })
+      .catch(()=>setOnline(false));
+  }, []);
 
   const addKw = () => {
     const parts = draft.split(",").map(s=>s.trim()).filter(Boolean);
@@ -250,18 +255,16 @@ function App(){
     setDraft("");
   };
   const removeKw = (k) => setKeywords(keywords.filter(x=>x!==k));
-  const run = () => {                       // mock; real: GET /search?q=&mode=&top=
-    setLoading(true);
-    setTimeout(()=>{
-      const ql = keywords.map(k=>k.toLowerCase());
-      const hit = MOCK.filter(it=>{
-        const hay = (it.record.title+" "+it.record.file_name+" "+it.record.section_title).toLowerCase();
-        return ql.some(k=>hay.includes(k));
-      });
-      const out = (hit.length?hit:MOCK).slice(0,topK).map((it,i)=>({...it,rank:i+1}));
-      setResults(out);
-      setLoading(false);
-    },300);
+  const run = () => {
+    if(!keywords.length) return;
+    setLoading(true); setError("");
+    const url = API + "/search?q=" + encodeURIComponent(keywords.join(",")) +
+                "&mode=" + mode + "&top=" + topK;
+    fetch(url)
+      .then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+      .then(d=>{ setResults(d.results || []); setOnline(true); })
+      .catch(e=>{ setError(String(e.message||e)); setResults([]); setOnline(false); })
+      .finally(()=>setLoading(false));
   };
 
   return (
@@ -273,11 +276,13 @@ function App(){
           <span className="label">trending_fetcher</span>
         </div>
         <div className="kbstat">
-          <div><span className="label">model</span><span className="v">[embed-model]</span></div>
-          <div><span className="label">dim</span><span className="v">[d]</span></div>
-          <div><span className="label">vectors</span><span className="v">[n]</span></div>
+          <div><span className="label">model</span><span className="v">{meta?.embedding_model || "—"}</span></div>
+          <div><span className="label">dim</span><span className="v">{meta?.dimension ?? "—"}</span></div>
+          <div><span className="label">vectors</span><span className="v">{meta?.total_vectors?.toLocaleString?.() ?? "—"}</span></div>
         </div>
-        <span className="wftag">WIREFRAME</span>
+        <span className={"conn "+(online===true?"on":online===false?"off":"")}>
+          {online===true?"● 已连接":online===false?"● 离线":"○ 连接中…"}
+        </span>
       </header>
 
       <div className="layout">
@@ -340,6 +345,12 @@ function App(){
               <div className="big">还没有检索结果</div>
               <div>在左侧添加关键词后点「检索」。结果逐篇列出，每篇可分别打开<b>原文 PDF</b>或<b>摘要·译文 MD</b>（GitHub 则为 README / 中文翻译），新标签页打开。</div>
             </div>
+          ) : error ? (
+            <div className="empty-state">
+              <div className="big">后端未连接</div>
+              <div>无法连接 <code className="mono">{API}</code>（{esc(error)}）。请先启动后端：<br/>
+                <code className="mono">E:\soft\Anaconda\python.exe kb_server.py</code></div>
+            </div>
           ) : results.length===0 ? (
             <div className="empty-state"><div className="big">无匹配结果</div></div>
           ) : (
@@ -349,7 +360,7 @@ function App(){
                 <span className="sub mono">{keywords.join(", ")} · {mode}</span>
                 <span className="rsort">按后端 rank 排序（{mode==="keyword"?"命中数":"相似度"} 降序）</span>
               </div>
-              {results.map(it=> <Card key={it.rank} item={it} mode={mode} />)}
+              {results.map(it=> <Card key={it.rank} item={it} mode={mode} keywords={keywords} />)}
             </div>
           )}
         </main>
