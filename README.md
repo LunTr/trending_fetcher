@@ -50,6 +50,37 @@ python baseall.py --root . --kb-dir kb_store --api API_KEY.json
 python search.py llm,agent --top 10 --kb-dir kb_store --api API_KEY.json --mode auto
 ```
 
+## 桌面查询应用（Tauri 单窗口）
+
+`desktop/` 下是用 Tauri 2 + React + TypeScript 重构的单窗口桌面前端，替代了原先浏览器里的 index.html。窗口启动时自动拉起 Python 检索后端（kb_server.py），关闭窗口时自动结束该进程；点击结果用系统默认程序打开 PDF 或中文译文 Markdown，不再走浏览器内联。
+
+前置依赖：
+
+- Python 及依赖（fastapi、uvicorn、faiss、numpy 等，见 requirements.txt）
+- Rust 工具链（rustc / cargo）
+- Windows 自带的 WebView2 运行时
+
+开发运行（自动起后端并打开窗口）：
+
+```
+cd desktop
+npm install --include=dev
+npm run tauri dev
+```
+
+打包为可执行文件 / 安装包：
+
+```
+cd desktop
+npm run tauri build
+```
+
+说明：
+
+- 检索引擎仍是 Python（FAISS 向量检索 + embedding）；桌面壳只负责自动启动它、提供原生窗口与系统默认程序打开文件的能力。
+- 若 python 不在 PATH，壳会依次尝试 python / python3 / E:\soft\Anaconda\python.exe；也可用环境变量 KB_PYTHON 指定解释器。
+- 后端默认监听 127.0.0.1:8000，仅本机可访问。
+
 ## 提示词管理
 
 - prompt.json 统一保存提示词
