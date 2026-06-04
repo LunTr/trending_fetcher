@@ -84,11 +84,12 @@ def get_working_client():
             return client, model
     raise Exception("没有可用的API节点。")
 
-def extract_text_from_pdf(pdf_path, max_pages=3):
+def extract_text_from_pdf(pdf_path, max_pages=None):
     text = ""
     try:
         doc = fitz.open(pdf_path)
-        for page_num in range(min(max_pages, len(doc))):
+        page_limit = len(doc) if max_pages is None else min(max_pages, len(doc))
+        for page_num in range(page_limit):
             page = doc.load_page(page_num)
             text += page.get_text()
         return text
