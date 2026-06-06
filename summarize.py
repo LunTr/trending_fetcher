@@ -162,12 +162,26 @@ def process_files():
             print("  [-] 无法提取文本或文件为空。")
             continue
             
-        summary = summarize_paper(client, model, paper_text)
+        summary = None
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            summary = summarize_paper(client, model, paper_text)
+            if summary:
+                break
+            print(f"  [!] 第 {attempt}/{max_attempts} 次总结失败，重新连接可用模型后重试...")
+            try:
+                client, model = get_working_client()
+            except Exception as e:
+                print(f"  [-] 无可用模型，终止重试: {e}")
+                break
+            time.sleep(2)
         
         if summary:
             with open(md_path, "w", encoding="utf-8") as f:
                 f.write(summary)
             print(f"  [+] 摘要保存成功: {md_path}")
+        else:
+            print(f"  [-] 总结失败，未生成: {md_path}")
             
         time.sleep(2)
 
