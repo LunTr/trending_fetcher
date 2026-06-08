@@ -1,10 +1,180 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import QueryPanel from "./QueryPanel";
 import ResultCard from "./ResultCard";
-import { fetchMeta, search } from "./api";
-import type { Meta, Mode, Result } from "./types";
+import { fetchMeta, fetchRuntime, fetchTask, search, startTask } from "./api";
+import type { Meta, Mode, Page, Result, RuntimeInfo, TaskKind, TaskState } from "./types";
+
+const NAV: { id: Page; label: string; desc: string }[] = [
+  { id: "main", label: "Main 下载", desc: "抓取 GitHub / HF Daily Papers" },
+  { id: "summarize", label: "Summarize", desc: "摘要论文并翻译 README" },
+  { id: "kb", label: "知识库", desc: "检索、增量建库、打开文件" },
+];
+
+const STAGE_LABELS: Record<string, string> = {
+  idle: "空闲",
+  starting: "启动中",
+  proxy: "代理配置",
+  history: "arXiv 历史",
+  github: "GitHub Trending",
+  "hf-list": "HF Daily Papers",
+  "hf-pdf": "PDF 下载",
+  main: "Main",
+  "model-test": "模型探测",
+  "pdf-summary": "PDF 摘要",
+  "readme-translate": "README 翻译",
+  "kb-build": "知识库构建",
+  failed: "失败",
+};
+
+function formatBytes(value?: number) {
+  if (!value || value <= 0) return "未知";
+  const units = ["B", "KB", "MB", "GB"];
+  let n = value;
+  let idx = 0;
+  while (n >= 1024 && idx < units.length - 1) {
+    n /= 1024;
+    idx += 1;
+  }
+  return `${n.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
+}
+
+function stageLabel(stage?: string) {
+  if (!stage) return "空闲";
+  return STAGE_LABELS[stage] || stage;
+}
+
+function statusLabel(task?: TaskState | null) {
+  if (!task || task.status === "idle") return "空闲";
+  if (task.status === "running") return "运行中";
+  if (task.status === "succeeded") return "已完成";
+  return "失败";
+}
+
+function progressPercent(task?: TaskState | null) {
+  const p = task?.progress;
+  if (!p) return null;
+  if (typeof p.percent === "number") return Math.max(0, Math.min(100, p.percent));
+  if (p.current && p.total) return Math.max(0, Math.min(100, (p.current / p.total) * 100));
+  return null;
+}
+
+function Metric({ label, value }: { label: string; value?: string | number | null }) {
+  return (
+    <div className="metric">
+      <span className="label">{label}</span>
+      <b>{value ?? "—"}</b>
+    </div>
+  );
+}
+
+function ProxyCard({ runtime }: { runtime: RuntimeInfo | null }) {
+  const proxy = runtime?.proxy;
+  return (
+    <div className="proxy-card">
+      <div className="proxy-head">
+        <span className="label">proxy</span>
+        <b className={proxy?.enabled ? "ok" : ""}>{proxy?.enabled ? "已启用" : "未检测"}</b>
+      </div>
+      <div className="proxy-lines">
+        <span><i>HTTP</i>{proxy?.http || "—"}</span>
+        <span><i>HTTPS</i>{proxy?.https || "—"}</span>
+        <span><i>NO_PROXY</i>{proxy?.no_proxy || "—"}</span>
+        <span><i>来源</i>{proxy?.source || "等待后端"}</span>
+      </div>
+    </div>
+  );
+}
+
+function TaskPage({
+  kind,
+  title,
+  summary,
+  task,
+  onStart,
+}: {
+  kind: TaskKind;
+  title: string;
+  summary: string;
+  task: TaskState | null;
+  onStart: (kind: TaskKind) => void;
+}) {
+  const isThisTask = task?.kind === kind;
+  const running = task?.status === "running";
+  const lockedByOther = running && !isThisTask;
+  const percent = isThisTask ? progressPercent(task) : null;
+  const p = isThisTask ? task?.progress : undefined;
+  const logs = isThisTask ? task?.logs.slice(-12).reverse() : [];
+
+  return (
+    <section className="task-page">
+      <div className="page-title">
+        <div>
+          <span className="label">workflow</span>
+          <h1>{title}</h1>
+          <p>{summary}</p>
+        </div>
+        <button className="primary-action" disabled={running} onClick={() => onStart(kind)}>
+          {lockedByOther ? "等待当前任务" : running && isThisTask ? "运行中" : "开始执行"}
+        </button>
+      </div>
+
+      <div className="status-grid">
+        <Metric label="状态" value={isThisTask ? statusLabel(task) : "未运行"} />
+        <Metric label="阶段" value={isThisTask ? stageLabel(task?.stage) : "—"} />
+        <Metric label="队列" value={p?.total ? `${p.current || 0}/${p.total}` : "—"} />
+        <Metric label="下载" value={p?.downloaded_bytes ? `${formatBytes(p.downloaded_bytes)} / ${formatBytes(p.total_bytes)}` : "—"} />
+      </div>
+
+      <div className="progress-card">
+        <div className="progress-copy">
+          <span className="label">current</span>
+          <b>{isThisTask ? task?.message : "等待启动"}</b>
+          <small>{p?.file_name || p?.title || p?.file_path || "—"}</small>
+        </div>
+        <div className={"bar " + (percent === null && isThisTask && task?.status === "running" ? "indeterminate" : "")}>
+          <span style={{ width: `${percent ?? 0}%` }} />
+        </div>
+        <div className="bar-foot">
+          <span>{percent === null ? "不确定进度" : `${percent.toFixed(1)}%`}</span>
+          <span>{p?.arxiv_id || p?.stage || ""}</span>
+        </div>
+      </div>
+
+      <div className="two-col">
+        <div className="run-stats">
+          <h2>本次统计</h2>
+          <div className="stat-list">
+            {isThisTask && Object.keys(task?.stats || {}).length ? (
+              Object.entries(task?.stats || {}).map(([key, value]) => <Metric key={key} label={key} value={value} />)
+            ) : (
+              <div className="empty-inline">任务完成后显示新增、跳过、失败数量。</div>
+            )}
+          </div>
+        </div>
+
+        <div className="log-panel">
+          <h2>实时日志</h2>
+          {logs?.length ? (
+            <div className="logs">
+              {logs.map((log, idx) => (
+                <div className={"log " + (log.level === "error" ? "err" : "")} key={`${log.ts}-${idx}`}>
+                  <span className="mono">{log.ts.split("T").pop()}</span>
+                  <b>{stageLabel(log.stage)}</b>
+                  <p>{log.message}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-inline">暂无日志。</div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
 
 export default function App() {
+  const [page, setPage] = useState<Page>("main");
   const [draft, setDraft] = useState("");
   const [keywords, setKeywords] = useState<string[]>(["llm", "agent"]);
   const [mode, setMode] = useState<Mode>("auto");
@@ -12,19 +182,33 @@ export default function App() {
   const [results, setResults] = useState<Result[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [taskError, setTaskError] = useState("");
   const [meta, setMeta] = useState<Meta | null>(null);
+  const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
+  const [task, setTask] = useState<TaskState | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
 
-  // poll /meta until the auto-started backend finishes loading the FAISS index
   useEffect(() => {
     let stop = false;
     const tick = () => {
-      fetchMeta()
-        .then((m) => { if (!stop) { setMeta(m); setOnline(true); } })
-        .catch(() => { if (!stop) { setOnline(false); setTimeout(tick, 1500); } });
+      Promise.all([fetchMeta(), fetchRuntime(), fetchTask()])
+        .then(([m, r, t]) => {
+          if (stop) return;
+          setMeta(m);
+          setRuntime(r);
+          setTask(t);
+          setOnline(true);
+        })
+        .catch(() => {
+          if (!stop) setOnline(false);
+        });
     };
     tick();
-    return () => { stop = true; };
+    const id = window.setInterval(tick, 1500);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
   }, []);
 
   const addKw = () => {
@@ -35,7 +219,7 @@ export default function App() {
   };
   const removeKw = (k: string) => setKeywords(keywords.filter((x) => x !== k));
 
-  const run = () => {
+  const runSearch = () => {
     if (!keywords.length) return;
     setLoading(true);
     setError("");
@@ -45,66 +229,141 @@ export default function App() {
       .finally(() => setLoading(false));
   };
 
+  const launchTask = (kind: TaskKind) => {
+    setTaskError("");
+    startTask(kind)
+      .then((next) => setTask(next))
+      .catch((e) => setTaskError(String(e.message || e)));
+  };
+
+  const kbStats = useMemo(() => ([
+    ["model", meta?.embedding_model || "—"],
+    ["dim", meta?.dimension ?? "—"],
+    ["vectors", meta?.total_vectors?.toLocaleString?.() ?? "—"],
+    ["updated", meta?.updated_at ? meta.updated_at.replace("T", " ").slice(0, 19) : "—"],
+  ]), [meta]);
+
   return (
-    <div>
-      <header className="topbar">
-        <div className="brand">
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="side-brand">
           <div className="glyph"></div>
-          <b>KB Search</b>
-          <span className="label">trending_fetcher</span>
+          <div>
+            <b>Trending Fetcher</b>
+            <span>single-window workstation</span>
+          </div>
         </div>
-        <div className="kbstat">
-          <div><span className="label">model</span><span className="v">{meta?.embedding_model || "—"}</span></div>
-          <div><span className="label">dim</span><span className="v">{meta?.dimension ?? "—"}</span></div>
-          <div><span className="label">vectors</span><span className="v">{meta?.total_vectors?.toLocaleString?.() ?? "—"}</span></div>
+
+        <nav className="nav">
+          {NAV.map((item) => (
+            <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => setPage(item.id)}>
+              <b>{item.label}</b>
+              <span>{item.desc}</span>
+            </button>
+          ))}
+        </nav>
+
+        <ProxyCard runtime={runtime} />
+
+        <div className="runtime-card">
+          <span className="label">runtime</span>
+          <div><i>数据根</i><span>{runtime?.root || "等待后端"}</span></div>
+          <div><i>API_KEY</i><span className={runtime?.api_key_exists ? "ok" : "warn"}>{runtime?.api_key_exists ? "已找到" : "未找到"}</span></div>
         </div>
-        <span className={"conn " + (online === true ? "on" : online === false ? "off" : "")}>
-          {online === true ? "● 已连接" : online === false ? "● 启动中…" : "○ 连接中…"}
-        </span>
-      </header>
+      </aside>
 
-      <div className="layout">
-        <QueryPanel
-          keywords={keywords}
-          draft={draft}
-          mode={mode}
-          topK={topK}
-          loading={loading}
-          onDraft={setDraft}
-          onAdd={addKw}
-          onRemove={removeKw}
-          onMode={setMode}
-          onTopK={setTopK}
-          onRun={run}
-        />
+      <main className="workspace">
+        <header className="topbar">
+          <div className="kbstat">
+            {kbStats.map(([label, value]) => (
+              <div key={label}><span className="label">{label}</span><span className="v">{value}</span></div>
+            ))}
+          </div>
+          <span className={"conn " + (online === true ? "on" : online === false ? "off" : "")}>
+            {online === true ? "● 已连接" : online === false ? "● 后端启动中" : "● 连接中"}
+          </span>
+        </header>
 
-        <main className="results">
-          {loading ? (
-            <div className="loading">检索中…</div>
-          ) : results === null ? (
-            <div className="empty-state">
-              <div className="big">还没有检索结果</div>
-              <div>在左侧添加关键词后点「检索」。每篇结果可用系统默认程序打开<b>原文 PDF</b>或<b>摘要·译文 MD</b>（GitHub 则为 README / 中文翻译）。</div>
-            </div>
-          ) : error ? (
-            <div className="empty-state">
-              <div className="big">后端未就绪</div>
-              <div>无法连接本地检索服务（{error}）。窗口启动时会自动拉起后端，请稍候；若长时间未连接，请检查 Python 环境。</div>
-            </div>
-          ) : results.length === 0 ? (
-            <div className="empty-state"><div className="big">无匹配结果</div></div>
-          ) : (
-            <div>
-              <div className="rhead">
-                <span className="count">{results.length} 条结果</span>
-                <span className="sub mono">{keywords.join(", ")} · {mode}</span>
-                <span className="rsort">按后端 rank 排序（{mode === "keyword" ? "命中数" : "相似度"} 降序）</span>
+        {taskError && <div className="task-error">{taskError}</div>}
+
+        {page === "main" && (
+          <TaskPage
+            kind="main"
+            title="Main 下载与增量建库"
+            summary="执行 arXiv 历史刷新、GitHub Trending、HuggingFace Daily Papers PDF 下载，并把当天产出增量写入知识库。"
+            task={task}
+            onStart={launchTask}
+          />
+        )}
+
+        {page === "summarize" && (
+          <TaskPage
+            kind="summarize"
+            title="Summarize 摘要与翻译"
+            summary="处理今日目录内 PDF 摘要、README 中文翻译，完成后可直接刷新知识库索引。"
+            task={task}
+            onStart={launchTask}
+          />
+        )}
+
+        {page === "kb" && (
+          <section className="kb-page">
+            <div className="kb-actions">
+              <div>
+                <span className="label">knowledge base</span>
+                <h1>知识库检索</h1>
+                <p>保留原有搜索接口和本地文件打开能力；需要时可手动触发当天目录增量建库。</p>
               </div>
-              {results.map((it) => <ResultCard key={it.rank} item={it} mode={mode} keywords={keywords} />)}
+              <button className="primary-action ghost" disabled={task?.status === "running"} onClick={() => launchTask("kb-build")}>
+                {task?.status === "running" ? "任务运行中" : "增量建库"}
+              </button>
             </div>
-          )}
-        </main>
-      </div>
+
+            <div className="layout kb-layout">
+              <QueryPanel
+                keywords={keywords}
+                draft={draft}
+                mode={mode}
+                topK={topK}
+                loading={loading}
+                onDraft={setDraft}
+                onAdd={addKw}
+                onRemove={removeKw}
+                onMode={setMode}
+                onTopK={setTopK}
+                onRun={runSearch}
+              />
+
+              <div className="results">
+                {loading ? (
+                  <div className="loading">检索中…</div>
+                ) : results === null ? (
+                  <div className="empty-state">
+                    <div className="big">还没有检索结果</div>
+                    <div>在左侧添加关键词后点击“检索”。每条结果可用系统默认程序打开原文 PDF、摘要译文或 README。</div>
+                  </div>
+                ) : error ? (
+                  <div className="empty-state">
+                    <div className="big">后端未就绪</div>
+                    <div>无法连接本地检索服务（{error}）。窗口启动时会自动拉起后端，请稍候。</div>
+                  </div>
+                ) : results.length === 0 ? (
+                  <div className="empty-state"><div className="big">无匹配结果</div></div>
+                ) : (
+                  <div>
+                    <div className="rhead">
+                      <span className="count">{results.length} 条结果</span>
+                      <span className="sub mono">{keywords.join(", ")} · {mode}</span>
+                      <span className="rsort">按后端 rank 排序</span>
+                    </div>
+                    {results.map((it) => <ResultCard key={it.rank} item={it} mode={mode} keywords={keywords} />)}
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        )}
+      </main>
     </div>
   );
 }

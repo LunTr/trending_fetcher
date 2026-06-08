@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*.pyo
+
+downloaded_arxiv_history.json
+downloaded_github_history.txt
+kb_store/
+20??-??-??/

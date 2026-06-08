@@ -1,11 +1,32 @@
 import { openPath } from "@tauri-apps/plugin-opener";
-import type { Meta, Mode, Result } from "./types";
+import type { Meta, Mode, Result, RuntimeInfo, TaskKind, TaskState } from "./types";
 
 const API = "http://127.0.0.1:8000"; // resident Python search service (auto-started by the shell)
 
 export async function fetchMeta(): Promise<Meta> {
   const r = await fetch(`${API}/meta`);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+export async function fetchRuntime(): Promise<RuntimeInfo> {
+  const r = await fetch(`${API}/runtime`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+export async function fetchTask(): Promise<TaskState> {
+  const r = await fetch(`${API}/tasks/current`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.json();
+}
+
+export async function startTask(kind: TaskKind): Promise<TaskState> {
+  const r = await fetch(`${API}/tasks/${kind}`, { method: "POST" });
+  if (!r.ok) {
+    const body = await r.text();
+    throw new Error(body || `HTTP ${r.status}`);
+  }
   return r.json();
 }
 

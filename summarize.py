@@ -9,12 +9,34 @@ from openai import OpenAI
 from Gtranslate import translate_large
 from prompt_store import load_prompts, render_prompt
 
-API_KEY_PATH = r"e:\DL\EssaysHere\API_KEY.json"
+DATA_ROOT = os.path.abspath(
+    os.environ.get("TRENDING_FETCHER_DATA_DIR")
+    or os.path.join(os.path.dirname(__file__), "..")
+)
+API_KEY_PATH = os.environ.get("TRENDING_FETCHER_API_KEY") or os.path.join(DATA_ROOT, "API_KEY.json")
 TODAY = datetime.datetime.now().strftime('%Y-%m-%d')
-TARGET_DIR = os.path.join(os.getcwd(), TODAY)
+TARGET_DIR = os.path.join(DATA_ROOT, TODAY)
 
 README_CONTEXT_LIMIT_CHARS = 100_000
 PROMPTS = load_prompts()
+
+def emit(reporter, event, **payload):
+    if reporter:
+        reporter({"event": event, **payload})
+
+def log(reporter, message, **payload):
+    print(message)
+    emit(reporter, "log", message=message, **payload)
+
+def configure_runtime(data_root=None, date_str=None):
+    global DATA_ROOT, API_KEY_PATH, TODAY, TARGET_DIR
+    if data_root:
+        DATA_ROOT = os.path.abspath(data_root)
+    os.makedirs(DATA_ROOT, exist_ok=True)
+    API_KEY_PATH = os.environ.get("TRENDING_FETCHER_API_KEY") or os.path.join(DATA_ROOT, "API_KEY.json")
+    if date_str:
+        TODAY = date_str
+    TARGET_DIR = os.path.join(DATA_ROOT, TODAY)
 
 def call_chat(client, model, system_prompt, user_prompt, temperature=0.3, timeout=180):
     try:
@@ -50,11 +72,11 @@ def load_summary_models():
 def get_model_name(api_conf):
     return api_conf.get("Model") or api_conf.get("Summary_Model")
 
-def test_api_connection(api_conf):
+def test_api_connection(api_conf, reporter=None):
     try:
         model_name = get_model_name(api_conf)
         if not model_name:
-            print("[!] Summary 模型名缺失，跳过该配置。")
+            log(reporter, "[!] Summary 模型名缺失，跳过该配置。", stage="model-test", level="error")
             return None, None
         client = OpenAI(
             api_key=api_conf["API_KEY"],
@@ -66,20 +88,20 @@ def test_api_connection(api_conf):
             max_tokens=5,
             timeout=10
         )
-        print(f"[*] 成功连接到模型: {model_name}")
+        log(reporter, f"[*] 成功连接到模型: {model_name}", stage="model-test", model=model_name)
         return client, model_name
     except Exception as e:
-        print(e)
+        log(reporter, str(e), stage="model-test", level="error")
         return None, None
 
-def get_working_client():
+def get_working_client(reporter=None):
     apis = load_summary_models()
     if not apis:
         raise Exception("Summary_Models 为空或未配置。")
     for api_conf in apis:
         model_name = get_model_name(api_conf) or "<missing-model>"
-        print(f"正在测试 API: {model_name} ...")
-        client, model = test_api_connection(api_conf)
+        log(reporter, f"正在测试 API: {model_name} ...", stage="model-test", model=model_name)
+        client, model = test_api_connection(api_conf, reporter=reporter)
         if client:
             return client, model
     raise Exception("没有可用的API节点。")
@@ -136,30 +158,47 @@ def translate_readme(client, model, text):
     prompt = render_prompt(prompt_conf["user_template"], text=limited_text)
     return call_chat(client, model, prompt_conf["system"], prompt, 0.3, 180)
 
-def process_files():
+def build_today_kb(reporter=None):
+    try:
+        import createbase
+        kb_dir = os.path.join(DATA_ROOT, "kb_store")
+        log(reporter, "Starting offline KB build after summarize...", stage="kb-build", source_dir=TARGET_DIR)
+        createbase.build_kb(source_dir=TARGET_DIR, kb_dir=kb_dir, api_key_path=API_KEY_PATH, reporter=reporter)
+    except Exception as e:
+        log(reporter, f"[!] KB build skipped: {e}", stage="kb-build", level="error")
+
+def process_files(data_root=None, date_str=None, reporter=None, build_index=False):
+    configure_runtime(data_root=data_root, date_str=date_str)
     if not os.path.exists(TARGET_DIR):
-        print(f"找不到今日目录: {TARGET_DIR}，请确保 main.py 正常运行并下载了当天的内容。")
+        log(reporter, f"找不到今日目录: {TARGET_DIR}，请确保 main.py 正常运行并下载了当天的内容。", stage="summarize", level="error")
         return
         
-    client, model = get_working_client()
+    client, model = get_working_client(reporter=reporter)
     
-    print("\n--- 开始分析 PDF 论文 ---")
+    log(reporter, "\n--- 开始分析 PDF 论文 ---", stage="pdf-summary")
     pdf_files = glob.glob(os.path.join(TARGET_DIR, "**", "*.pdf"), recursive=True)
     if not pdf_files:
-        print("没有找到 PDF 文件。")
+        log(reporter, "没有找到 PDF 文件。", stage="pdf-summary")
+    emit(reporter, "queue", stage="pdf-summary", current=0, total=len(pdf_files))
     
-    for pdf_path in pdf_files:
+    pdf_done = 0
+    pdf_skipped = 0
+    pdf_failed = 0
+    for idx, pdf_path in enumerate(pdf_files, 1):
         md_path = pdf_path.replace(".pdf", "_summary.md")
+        emit(reporter, "queue", stage="pdf-summary", current=idx, total=len(pdf_files), file_name=os.path.basename(pdf_path), file_path=pdf_path)
         
         if os.path.exists(md_path):
-            print(f"[*] 已存在摘要，跳过: {os.path.basename(pdf_path)}")
+            pdf_skipped += 1
+            log(reporter, f"[*] 已存在摘要，跳过: {os.path.basename(pdf_path)}", stage="pdf-summary", file_path=pdf_path)
             continue
             
-        print(f"\n[+] 正在提取并总结论文: {os.path.basename(pdf_path)}")
+        log(reporter, f"\n[+] 正在提取并总结论文: {os.path.basename(pdf_path)}", stage="pdf-summary", file_path=pdf_path)
         paper_text = extract_text_from_pdf(pdf_path)
         
         if not paper_text.strip():
-            print("  [-] 无法提取文本或文件为空。")
+            pdf_failed += 1
+            log(reporter, "  [-] 无法提取文本或文件为空。", stage="pdf-summary", file_path=pdf_path, level="error")
             continue
             
         summary = None
@@ -168,43 +207,52 @@ def process_files():
             summary = summarize_paper(client, model, paper_text)
             if summary:
                 break
-            print(f"  [!] 第 {attempt}/{max_attempts} 次总结失败，重新连接可用模型后重试...")
+            log(reporter, f"  [!] 第 {attempt}/{max_attempts} 次总结失败，重新连接可用模型后重试...", stage="pdf-summary", attempt=attempt, max_attempts=max_attempts)
             try:
-                client, model = get_working_client()
+                client, model = get_working_client(reporter=reporter)
             except Exception as e:
-                print(f"  [-] 无可用模型，终止重试: {e}")
+                log(reporter, f"  [-] 无可用模型，终止重试: {e}", stage="pdf-summary", level="error")
                 break
             time.sleep(2)
         
         if summary:
             with open(md_path, "w", encoding="utf-8") as f:
                 f.write(summary)
-            print(f"  [+] 摘要保存成功: {md_path}")
+            pdf_done += 1
+            log(reporter, f"  [+] 摘要保存成功: {md_path}", stage="pdf-summary", file_path=md_path)
         else:
-            print(f"  [-] 总结失败，未生成: {md_path}")
+            pdf_failed += 1
+            log(reporter, f"  [-] 总结失败，未生成: {md_path}", stage="pdf-summary", file_path=md_path, level="error")
             
         time.sleep(2)
 
-    print("\n--- 开始翻译 GitHub README ---")
+    emit(reporter, "stats", pdf_done=pdf_done, pdf_skipped=pdf_skipped, pdf_failed=pdf_failed)
+    log(reporter, "\n--- 开始翻译 GitHub README ---", stage="readme-translate")
     readme_files = glob.glob(os.path.join(TARGET_DIR, "GitHub", "**", "README.md"), recursive=True)
     if not readme_files:
-        print("今日 GitHub 目录下没有找到任何 README.md 文件。")
+        log(reporter, "今日 GitHub 目录下没有找到任何 README.md 文件。", stage="readme-translate")
+    emit(reporter, "queue", stage="readme-translate", current=0, total=len(readme_files))
         
-    for readme_path in readme_files:
+    readme_done = 0
+    readme_skipped = 0
+    readme_failed = 0
+    for idx, readme_path in enumerate(readme_files, 1):
         zh_readme_path = os.path.join(os.path.dirname(readme_path), "README_zh.md")
+        emit(reporter, "queue", stage="readme-translate", current=idx, total=len(readme_files), file_name=os.path.basename(os.path.dirname(readme_path)), file_path=readme_path)
         
         if os.path.exists(zh_readme_path):
-            print(f"[*] 已存在中文翻译，跳过: {os.path.basename(os.path.dirname(readme_path))}/README_zh.md")
+            readme_skipped += 1
+            log(reporter, f"[*] 已存在中文翻译，跳过: {os.path.basename(os.path.dirname(readme_path))}/README_zh.md", stage="readme-translate", file_path=zh_readme_path)
             continue
             
-        print(f"\n[+] 正在翻译 README: {os.path.basename(os.path.dirname(readme_path))}")
+        log(reporter, f"\n[+] 正在翻译 README: {os.path.basename(os.path.dirname(readme_path))}", stage="readme-translate", file_path=readme_path)
         readme_text = read_text_file(readme_path).strip()
         if not readme_text:
             continue
 
         translation = translate_readme(client, model, readme_text)
         if not translation or not translation.strip():
-            print("  [!] 大模型翻译失败，切换 Google 翻译处理该文档。")
+            log(reporter, "  [!] 大模型翻译失败，切换 Google 翻译处理该文档。", stage="readme-translate")
             try:
                 limited_text = truncate_readme_text(readme_text, README_CONTEXT_LIMIT_CHARS)
                 translation = translate_large(limited_text)
@@ -215,11 +263,17 @@ def process_files():
         if translation and translation.strip():
             with open(zh_readme_path, "w", encoding="utf-8") as f:
                 f.write(translation)
-            print(f"  [+] 翻译保存成功: {zh_readme_path}")
+            readme_done += 1
+            log(reporter, f"  [+] 翻译保存成功: {zh_readme_path}", stage="readme-translate", file_path=zh_readme_path)
         else:
-            print("  [-] 翻译失败，未生成 README_zh.md。")
+            readme_failed += 1
+            log(reporter, "  [-] 翻译失败，未生成 README_zh.md。", stage="readme-translate", level="error")
             
         time.sleep(2)
+
+    emit(reporter, "stats", readme_done=readme_done, readme_skipped=readme_skipped, readme_failed=readme_failed)
+    if build_index:
+        build_today_kb(reporter=reporter)
 
 if __name__ == "__main__":
     process_files()

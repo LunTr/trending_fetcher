@@ -52,7 +52,14 @@ python search.py llm,agent --top 10 --kb-dir kb_store --api API_KEY.json --mode 
 
 ## 桌面查询应用（Tauri 单窗口）
 
-`desktop/` 下是用 Tauri 2 + React + TypeScript 重构的单窗口桌面前端，替代了原先浏览器里的 index.html。窗口启动时自动拉起 Python 检索后端（kb_server.py），关闭窗口时自动结束该进程；点击结果用系统默认程序打开 PDF 或中文译文 Markdown，不再走浏览器内联。
+`desktop/` 下是用 Tauri 2 + React + TypeScript 重构的单窗口桌面前端，替代了原先浏览器里的 index.html。窗口启动时自动拉起 Python 后端（kb_server.py），关闭窗口时自动结束该进程；点击结果用系统默认程序打开 PDF 或中文译文 Markdown，不再走浏览器内联。
+
+桌面端现在是一个工作台：
+
+- Main 下载：运行 arXiv 历史刷新、GitHub Trending、HuggingFace Daily Papers PDF 下载，并显示 PDF 字节进度。
+- Summarize：运行 PDF 摘要、README 翻译，并显示模型探测、队列进度和实时日志。
+- 知识库：保留原有 `/meta`、`/search` 检索接口，支持手动触发当天目录增量建库。
+- 代理状态：左侧常驻显示系统代理配置，敏感认证信息会脱敏。
 
 前置依赖：
 
@@ -68,6 +75,13 @@ npm install --include=dev
 npm run tauri dev
 ```
 
+轻量开发运行（Rust target 放入临时目录，退出后清理）：
+
+```
+cd desktop
+npm run tauri:dev:light
+```
+
 打包为可执行文件 / 安装包：
 
 ```
@@ -80,6 +94,8 @@ npm run tauri build
 - 检索引擎仍是 Python（FAISS 向量检索 + embedding）；桌面壳只负责自动启动它、提供原生窗口与系统默认程序打开文件的能力。
 - 若 python 不在 PATH，壳会依次尝试 python / python3 / E:\soft\Anaconda\python.exe；也可用环境变量 KB_PYTHON 指定解释器。
 - 后端默认监听 127.0.0.1:8000，仅本机可访问。
+- 数据根目录由 `TRENDING_FETCHER_DATA_DIR` 控制；开发态默认是仓库上一级目录，打包态默认是应用本地数据目录。
+- 打包资源只声明轻量 Python 脚本和 prompt/requirements，不包含 Python 解释器、API_KEY.json、日期目录、PDF、kb_store 或模型缓存。
 
 ## 提示词管理
 

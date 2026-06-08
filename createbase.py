@@ -23,6 +23,16 @@ DEFAULT_API_KEY_PATH = os.path.abspath(
 )
 
 
+def emit(reporter, event, **payload):
+    if reporter:
+        reporter({"event": event, **payload})
+
+
+def report_log(reporter, message, **payload):
+    print(message)
+    emit(reporter, "log", message=message, **payload)
+
+
 def remove_corrupt_file(file_path, reason=None):
     base_name = os.path.basename(file_path)
     if not os.path.exists(file_path):
@@ -38,22 +48,23 @@ def remove_corrupt_file(file_path, reason=None):
             print(f"[!] Failed to delete corrupt file: {base_name} ({exc})")
 
 
-def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=DEFAULT_API_KEY_PATH, rebuild=False):
+def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=DEFAULT_API_KEY_PATH, rebuild=False, reporter=None):
     try:
         import numpy as np
     except Exception:
-        print("[!] Missing dependency: numpy. Install it before running createbase.")
+        report_log(reporter, "[!] Missing dependency: numpy. Install it before running createbase.", stage="kb-build", level="error")
         return
 
     try:
         import faiss
     except Exception:
-        print("[!] Missing dependency: faiss-cpu. Install it before running createbase.")
+        report_log(reporter, "[!] Missing dependency: faiss-cpu. Install it before running createbase.", stage="kb-build", level="error")
         return
 
     if not os.path.exists(source_dir):
-        print(f"[!] Source directory not found: {source_dir}")
+        report_log(reporter, f"[!] Source directory not found: {source_dir}", stage="kb-build", level="error")
         return
+    emit(reporter, "stage", stage="kb-build", source_dir=source_dir, kb_dir=kb_dir)
 
     os.makedirs(kb_dir, exist_ok=True)
     index_path = os.path.join(kb_dir, "vectors.faiss")
@@ -80,8 +91,18 @@ def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=
 
     pending_records = []
     total_new = 0
+    processed_files = 0
 
     for file_path in iter_paper_files(source_dir):
+        processed_files += 1
+        emit(
+            reporter,
+            "kb_file",
+            stage="kb-build",
+            current=processed_files,
+            file_name=os.path.basename(file_path),
+            file_path=file_path,
+        )
         text, doc_meta = extract_text_and_meta(file_path)
         if not text.strip():
             continue
@@ -123,6 +144,7 @@ def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=
                         np,
                     )
                     total_new += added
+                    emit(reporter, "kb_progress", stage="kb-build", added_chunks=total_new, total_vectors=meta.get("total_vectors"))
                     for rec in pending_records:
                         existing_chunk_ids.add(rec["chunk_id"])
                     pending_records = []
@@ -138,17 +160,18 @@ def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=
             np,
         )
         total_new += added
+        emit(reporter, "kb_progress", stage="kb-build", added_chunks=total_new, total_vectors=meta.get("total_vectors"))
         for rec in pending_records:
             existing_chunk_ids.add(rec["chunk_id"])
 
     if index is None:
-        print("[!] No vectors were created. Check source directory and parsers.")
+        report_log(reporter, "[!] No vectors were created. Check source directory and parsers.", stage="kb-build")
         return
 
     faiss.write_index(index, index_path)
     save_meta(meta_path, meta)
 
-    print(f"[+] KB build complete. Added {total_new} new chunks.")
+    report_log(reporter, f"[+] KB build complete. Added {total_new} new chunks.", stage="kb-build", added_chunks=total_new)
 
 
 def load_or_create_index(index_path, meta_path, embed_model):
