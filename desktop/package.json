@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "tauri:dev:light": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/tauri-dev-light.ps1",
+    "tauri:clean": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/clean-tauri-cache.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
