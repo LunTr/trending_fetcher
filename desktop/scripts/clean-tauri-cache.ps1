@@ -37,8 +37,11 @@ $workspaceTarget = Join-Path $srcTauriDir "target"
 $tempRoot = [System.IO.Path]::GetTempPath()
 $ephemeralCache = Join-Path $tempRoot "trending_fetcher_tauri_target"
 $checkCache = Join-Path $tempRoot "trending_fetcher_cargo_check_target"
+$localAppData = [Environment]::GetFolderPath("LocalApplicationData")
+$persistentCacheRoot = Join-Path $localAppData "trending_fetcher\tauri-target"
 
 Remove-SafeDirectory -Path $workspaceTarget -AllowedRoot $srcTauriDir
+Remove-SafeDirectory -Path $persistentCacheRoot -AllowedRoot $localAppData
 Remove-SafeDirectory -Path $ephemeralCache -AllowedRoot $tempRoot
 Remove-SafeDirectory -Path $checkCache -AllowedRoot $tempRoot
 
