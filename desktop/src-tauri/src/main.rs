@@ -33,7 +33,9 @@ fn find_backend_exe(app: &tauri::App) -> Option<PathBuf> {
             for rel in [
                 "kb_server_pack/kb_server_pack.exe",
                 "dist/kb_server_pack/kb_server_pack.exe",
+                "_up_/_up_/dist/kb_server_pack/kb_server_pack.exe",
                 "resources/kb_server_pack/kb_server_pack.exe",
+                "resources/_up_/_up_/dist/kb_server_pack/kb_server_pack.exe",
             ] {
                 let candidate = dir.join(rel);
                 if candidate.is_file() {
