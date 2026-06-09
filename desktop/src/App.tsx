@@ -133,16 +133,6 @@ function TaskPage({
             </div>
           </div>
 
-          <div className="run-stats">
-            <h2>本次统计</h2>
-            <div className="stat-list">
-              {isThisTask && Object.keys(task?.stats || {}).length ? (
-                Object.entries(task?.stats || {}).map(([key, value]) => <Metric key={key} label={key} value={value} />)
-              ) : (
-                <div className="empty-inline">任务完成后显示新增、跳过、失败数量。</div>
-              )}
-            </div>
-          </div>
         </div>
 
         <div className="log-panel">
