@@ -52,20 +52,22 @@ python search.py llm,agent --top 10 --kb-dir kb_store --api API_KEY.json --mode 
 
 ## 桌面查询应用（Tauri 单窗口）
 
-`desktop/` 下是用 Tauri 2 + React + TypeScript 重构的单窗口桌面前端，替代了原先浏览器里的 index.html。窗口启动时自动拉起 Python 后端（kb_server.py），关闭窗口时自动结束该进程；点击结果用系统默认程序打开 PDF 或中文译文 Markdown，不再走浏览器内联。
+`desktop/` 下是用 Tauri 2 + React + TypeScript 构建的单窗口桌面前端。窗口启动时会自动拉起本地 Python 后端，关闭窗口时自动结束该进程；点击结果会用系统默认程序打开 PDF、摘要译文或 README。
+
+开发态会优先使用源码里的 `kb_server.py`。打包态会优先使用 PyInstaller 生成的 `dist/kb_server_pack/kb_server_pack.exe`，因此安装版不要求用户预先安装 Python。
 
 桌面端现在是一个工作台：
 
 - Main 下载：运行 arXiv 历史刷新、GitHub Trending、HuggingFace Daily Papers PDF 下载，并显示 PDF 字节进度。
 - Summarize：运行 PDF 摘要、README 翻译，并显示模型探测、队列进度和实时日志。
 - 知识库：保留原有 `/meta`、`/search` 检索接口，支持手动触发当天目录增量建库。
-- 代理状态：左侧常驻显示系统代理配置，敏感认证信息会脱敏。
+- 顶部状态栏会按页面显示 HTTPS 代理、Summary 模型或知识库 embedding/vectors 信息。
+- Main 会统计当天已下载 arXiv PDF 数量，避免重复运行时超过每日下载上限。
 
 前置依赖：
 
-- Python 及依赖（fastapi、uvicorn、faiss、numpy 等，见 requirements.txt）
-- Rust 工具链（rustc / cargo）
-- Windows 自带的 WebView2 运行时
+- 开发运行：Python 及依赖、Node.js、Rust 工具链、Windows WebView2 运行时
+- 打包安装版：用户机器只需要 Windows WebView2 运行时；Python 后端已内置在安装包中
 
 开发运行（自动起后端并打开窗口）：
 
@@ -82,20 +84,42 @@ cd desktop
 npm run tauri:dev:light
 ```
 
-打包为可执行文件 / 安装包：
+### 打包 Windows 安装包
+
+先用隔离 venv 打包 Python 后端，避免把 Anaconda、torch、transformers 等无关大包带进去：
 
 ```
-cd desktop
-npm run tauri build
+cd E:\DL\EssaysHere\trending_fetcher
+E:\soft\Anaconda\python.exe -m venv .venv-pack
+.\.venv-pack\Scripts\python.exe -m pip install --upgrade pip
+.\.venv-pack\Scripts\pip.exe install -r requirements-pack.txt
+.\.venv-pack\Scripts\pyinstaller.exe --noconfirm --onedir --name kb_server_pack --add-data "prompt.json;." --hidden-import main --hidden-import summarize --hidden-import createbase --hidden-import update_arxiv_history --hidden-import search --hidden-import model_client --hidden-import prompt_store --hidden-import Gtranslate --hidden-import best --hidden-import baseall .\kb_server.py
 ```
+
+再打 Tauri 安装包：
+
+```
+cd E:\DL\EssaysHere\trending_fetcher\desktop
+$env:CARGO_TARGET_DIR="$env:LOCALAPPDATA\trending_fetcher\tauri-target\target"
+.\node_modules\.bin\tauri.cmd build --bundles nsis
+```
+
+当前构建产物：
+
+```
+E:\DL\EssaysHere\trending_fetcher\dist\KB Search_0.1.0_x64-setup.exe
+```
+
+本次完整包体积约 44 MB，内置 Python 后端目录约 163 MB。Rust/Tauri release 构建缓存位于 `%LOCALAPPDATA%\trending_fetcher\tauri-target\target`，可能超过 1GB，但不会进入安装包。
 
 说明：
 
 - 检索引擎仍是 Python（FAISS 向量检索 + embedding）；桌面壳只负责自动启动它、提供原生窗口与系统默认程序打开文件的能力。
-- 若 python 不在 PATH，壳会依次尝试 python / python3 / E:\soft\Anaconda\python.exe；也可用环境变量 KB_PYTHON 指定解释器。
+- 打包态优先启动内置 `kb_server_pack.exe`；开发态找不到内置后端时，壳会依次尝试 `KB_PYTHON`、python、python3、`E:\soft\Anaconda\python.exe`。
 - 后端默认监听 127.0.0.1:8000，仅本机可访问。
 - 数据根目录由 `TRENDING_FETCHER_DATA_DIR` 控制；开发态默认是仓库上一级目录，打包态默认是应用本地数据目录。
-- 打包资源只声明轻量 Python 脚本和 prompt/requirements，不包含 Python 解释器、API_KEY.json、日期目录、PDF、kb_store 或模型缓存。
+- 安装版默认数据目录类似 `%LOCALAPPDATA%\com.trendingfetcher.kbsearch\data`。`API_KEY.json`、日期目录、PDF、`kb_store` 不会被打进安装包，需要放在数据目录或通过环境变量指定。
+- `requirements-pack.txt` 是打包后端用的最小依赖清单；`requirements.txt` 是源码运行依赖清单。
 
 ## 提示词管理
 
