@@ -35,19 +35,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "../../kb_server.py",
-      "../../search.py",
-      "../../createbase.py",
-      "../../main.py",
-      "../../summarize.py",
-      "../../update_arxiv_history.py",
-      "../../Gtranslate.py",
-      "../../prompt_store.py",
-      "../../model_client.py",
-      "../../baseall.py",
-      "../../best.py",
-      "../../prompt.json",
-      "../../requirements.txt"
+      "../../dist/kb_server_pack"
     ]
   }
 }

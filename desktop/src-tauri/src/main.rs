@@ -9,8 +9,7 @@ use tauri::Manager;
 
 struct Backend(Mutex<Option<Child>>);
 
-/// Locate kb_server.py in dev checkout or packaged resources.
-fn find_script(app: &tauri::App) -> Option<PathBuf> {
+fn search_bases(app: &tauri::App) -> Vec<PathBuf> {
     let mut bases: Vec<PathBuf> = Vec::new();
     if let Ok(cwd) = std::env::current_dir() {
         bases.push(cwd);
@@ -23,7 +22,35 @@ fn find_script(app: &tauri::App) -> Option<PathBuf> {
     if let Ok(resource_dir) = app.path().resource_dir() {
         bases.push(resource_dir);
     }
-    for base in bases {
+    bases
+}
+
+/// Locate the packaged Python backend executable.
+fn find_backend_exe(app: &tauri::App) -> Option<PathBuf> {
+    for base in search_bases(app) {
+        let mut dir = base;
+        for _ in 0..5 {
+            for rel in [
+                "kb_server_pack/kb_server_pack.exe",
+                "dist/kb_server_pack/kb_server_pack.exe",
+                "resources/kb_server_pack/kb_server_pack.exe",
+            ] {
+                let candidate = dir.join(rel);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// Locate kb_server.py in dev checkout or packaged resources.
+fn find_script(app: &tauri::App) -> Option<PathBuf> {
+    for base in search_bases(app) {
         let mut dir = base;
         for _ in 0..5 {
             for rel in ["kb_server.py", "trending_fetcher/kb_server.py"] {
@@ -40,14 +67,14 @@ fn find_script(app: &tauri::App) -> Option<PathBuf> {
     None
 }
 
-fn resolve_data_dir(app: &tauri::App, script: &PathBuf) -> PathBuf {
+fn resolve_data_dir(app: &tauri::App, backend_path: &PathBuf) -> PathBuf {
     if let Ok(dir) = std::env::var("TRENDING_FETCHER_DATA_DIR") {
         if !dir.is_empty() {
             return PathBuf::from(dir);
         }
     }
 
-    if let Some(code_dir) = script.parent() {
+    if let Some(code_dir) = backend_path.parent() {
         if code_dir.join("API_KEY.json").is_file() || code_dir.join("kb_store").is_dir() {
             return code_dir.to_path_buf();
         }
@@ -61,11 +88,11 @@ fn resolve_data_dir(app: &tauri::App, script: &PathBuf) -> PathBuf {
     app.path()
         .app_local_data_dir()
         .map(|dir| dir.join("data"))
-        .unwrap_or_else(|_| script.parent().map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")))
+        .unwrap_or_else(|_| backend_path.parent().map(PathBuf::from).unwrap_or_else(|| PathBuf::from(".")))
 }
 
-fn python_command(py: &str) -> Command {
-    let mut cmd = Command::new(py);
+fn hidden_command(program: &PathBuf) -> Command {
+    let mut cmd = Command::new(program);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -76,6 +103,24 @@ fn python_command(py: &str) -> Command {
 
 /// Start the resident Python search service, trying common interpreters in order.
 fn spawn_backend(app: &tauri::App) -> Option<Child> {
+    if let Some(backend_exe) = find_backend_exe(app) {
+        let data_dir = resolve_data_dir(app, &backend_exe);
+        let api_key = std::env::var("TRENDING_FETCHER_API_KEY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| data_dir.join("API_KEY.json"));
+        let _ = std::fs::create_dir_all(&data_dir);
+
+        let mut cmd = hidden_command(&backend_exe);
+        cmd.current_dir(&data_dir)
+            .env("PYTHONUNBUFFERED", "1")
+            .env("TRENDING_FETCHER_CODE_DIR", backend_exe.parent().unwrap_or(&data_dir))
+            .env("TRENDING_FETCHER_DATA_DIR", &data_dir)
+            .env("TRENDING_FETCHER_API_KEY", &api_key);
+        if let Ok(child) = cmd.spawn() {
+            return Some(child);
+        }
+    }
+
     let script = find_script(app)?;
     let data_dir = resolve_data_dir(app, &script);
     let code_dir = script.parent().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
@@ -95,7 +140,8 @@ fn spawn_backend(app: &tauri::App) -> Option<Child> {
     candidates.push(r"E:\soft\Anaconda\python.exe".into());
 
     for py in candidates {
-        let mut cmd = python_command(&py);
+        let py_path = PathBuf::from(py);
+        let mut cmd = hidden_command(&py_path);
         cmd.arg(&script)
             .current_dir(&data_dir)
             .env("PYTHONDONTWRITEBYTECODE", "1")
