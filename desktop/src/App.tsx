@@ -109,37 +109,39 @@ function TaskPage({
         </button>
       </div>
 
-      <div className="status-grid">
-        <Metric label="状态" value={isThisTask ? statusLabel(task) : "未运行"} />
-        <Metric label="阶段" value={isThisTask ? stageLabel(task?.stage) : "—"} />
-        <Metric label="队列" value={p?.total ? `${p.current || 0}/${p.total}` : "—"} />
-        <Metric label="下载" value={p?.downloaded_bytes ? `${formatBytes(p.downloaded_bytes)} / ${formatBytes(p.total_bytes)}` : "—"} />
-      </div>
+      <div className="task-layout">
+        <div className="task-side">
+          <div className="status-grid">
+            <Metric label="状态" value={isThisTask ? statusLabel(task) : "未运行"} />
+            <Metric label="阶段" value={isThisTask ? stageLabel(task?.stage) : "—"} />
+            <Metric label="队列" value={p?.total ? `${p.current || 0}/${p.total}` : "—"} />
+            <Metric label="下载" value={p?.downloaded_bytes ? `${formatBytes(p.downloaded_bytes)} / ${formatBytes(p.total_bytes)}` : "—"} />
+          </div>
 
-      <div className="progress-card">
-        <div className="progress-copy">
-          <span className="label">current</span>
-          <b>{isThisTask ? task?.message : "等待启动"}</b>
-          <small>{p?.file_name || p?.title || p?.file_path || "—"}</small>
-        </div>
-        <div className={"bar " + (percent === null && isThisTask && task?.status === "running" ? "indeterminate" : "")}>
-          <span style={{ width: `${percent ?? 0}%` }} />
-        </div>
-        <div className="bar-foot">
-          <span>{percent === null ? "不确定进度" : `${percent.toFixed(1)}%`}</span>
-          <span>{p?.arxiv_id || p?.stage || ""}</span>
-        </div>
-      </div>
+          <div className="progress-card">
+            <div className="progress-copy">
+              <span className="label">current</span>
+              <b>{isThisTask ? task?.message : "等待启动"}</b>
+              <small>{p?.file_name || p?.title || p?.file_path || "—"}</small>
+            </div>
+            <div className={"bar " + (percent === null && isThisTask && task?.status === "running" ? "indeterminate" : "")}>
+              <span style={{ width: `${percent ?? 0}%` }} />
+            </div>
+            <div className="bar-foot">
+              <span>{percent === null ? "不确定进度" : `${percent.toFixed(1)}%`}</span>
+              <span>{p?.arxiv_id || p?.stage || ""}</span>
+            </div>
+          </div>
 
-      <div className="two-col">
-        <div className="run-stats">
-          <h2>本次统计</h2>
-          <div className="stat-list">
-            {isThisTask && Object.keys(task?.stats || {}).length ? (
-              Object.entries(task?.stats || {}).map(([key, value]) => <Metric key={key} label={key} value={value} />)
-            ) : (
-              <div className="empty-inline">任务完成后显示新增、跳过、失败数量。</div>
-            )}
+          <div className="run-stats">
+            <h2>本次统计</h2>
+            <div className="stat-list">
+              {isThisTask && Object.keys(task?.stats || {}).length ? (
+                Object.entries(task?.stats || {}).map(([key, value]) => <Metric key={key} label={key} value={value} />)
+              ) : (
+                <div className="empty-inline">任务完成后显示新增、跳过、失败数量。</div>
+              )}
+            </div>
           </div>
         </div>
 
