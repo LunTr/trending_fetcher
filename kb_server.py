@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 import sys
 import threading
@@ -62,6 +63,20 @@ def proxy_status():
         "no_proxy": os.environ.get("NO_PROXY") or os.environ.get("no_proxy"),
         "source": "system/env" if proxies else "none",
     }
+
+
+def summary_model_names():
+    try:
+        with open(API_KEY, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except Exception:
+        return []
+    models = config.get("Summary_Models") or []
+    names = []
+    for item in models:
+        if isinstance(item, dict) and item.get("Model"):
+            names.append(str(item["Model"]))
+    return names
 
 
 class TaskManager:
@@ -199,6 +214,7 @@ def runtime():
         "api_key": API_KEY,
         "api_key_exists": os.path.exists(API_KEY),
         "today": today_str(),
+        "summary_models": summary_model_names(),
         "proxy": proxy_status(),
     }
 

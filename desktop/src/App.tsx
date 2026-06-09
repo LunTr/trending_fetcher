@@ -67,20 +67,11 @@ function Metric({ label, value }: { label: string; value?: string | number | nul
   );
 }
 
-function ProxyCard({ runtime }: { runtime: RuntimeInfo | null }) {
-  const proxy = runtime?.proxy;
+function TopMetric({ label, value, tone }: { label: string; value?: string | number | null; tone?: "ok" | "warn" }) {
   return (
-    <div className="proxy-card">
-      <div className="proxy-head">
-        <span className="label">proxy</span>
-        <b className={proxy?.enabled ? "ok" : ""}>{proxy?.enabled ? "已启用" : "未检测"}</b>
-      </div>
-      <div className="proxy-lines">
-        <span><i>HTTP</i>{proxy?.http || "—"}</span>
-        <span><i>HTTPS</i>{proxy?.https || "—"}</span>
-        <span><i>NO_PROXY</i>{proxy?.no_proxy || "—"}</span>
-        <span><i>来源</i>{proxy?.source || "等待后端"}</span>
-      </div>
+    <div>
+      <span className="label">{label}</span>
+      <span className={"v " + (tone || "")}>{value ?? "—"}</span>
     </div>
   );
 }
@@ -236,47 +227,56 @@ export default function App() {
       .catch((e) => setTaskError(String(e.message || e)));
   };
 
-  const kbStats = useMemo(() => ([
-    ["model", meta?.embedding_model || "—"],
-    ["dim", meta?.dimension ?? "—"],
-    ["vectors", meta?.total_vectors?.toLocaleString?.() ?? "—"],
-    ["updated", meta?.updated_at ? meta.updated_at.replace("T", " ").slice(0, 19) : "—"],
-  ]), [meta]);
+  const topStats = useMemo(() => {
+    const summaryModels = runtime?.summary_models?.length ? runtime.summary_models.join(" / ") : "—";
+    if (page === "main") {
+      return [
+        { label: "https proxy", value: runtime?.proxy?.https || "未启用", tone: runtime?.proxy?.https ? "ok" as const : undefined },
+        { label: "data root", value: runtime?.root || "等待后端" },
+        { label: "api_key", value: runtime?.api_key_exists ? "已找到" : "未找到", tone: runtime?.api_key_exists ? "ok" as const : "warn" as const },
+        { label: "today", value: runtime?.today || "—" },
+      ];
+    }
+    if (page === "summarize") {
+      return [
+        { label: "summary model", value: summaryModels },
+        { label: "model count", value: runtime?.summary_models?.length ?? "—" },
+        { label: "api_key", value: runtime?.api_key_exists ? "已找到" : "未找到", tone: runtime?.api_key_exists ? "ok" as const : "warn" as const },
+        { label: "today", value: runtime?.today || "—" },
+      ];
+    }
+    return [
+      { label: "model", value: meta?.embedding_model || "—" },
+      { label: "dim", value: meta?.dimension ?? "—" },
+      { label: "vectors", value: meta?.total_vectors?.toLocaleString?.() ?? "—" },
+      { label: "updated", value: meta?.updated_at ? meta.updated_at.replace("T", " ").slice(0, 19) : "—" },
+    ];
+  }, [meta, page, runtime]);
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="side-brand">
-          <div className="glyph"></div>
-          <div>
-            <b>Trending Fetcher</b>
-            <span>single-window workstation</span>
-          </div>
-        </div>
-
-        <nav className="nav">
-          {NAV.map((item) => (
-            <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => setPage(item.id)}>
-              <b>{item.label}</b>
-              <span>{item.desc}</span>
-            </button>
-          ))}
-        </nav>
-
-        <ProxyCard runtime={runtime} />
-
-        <div className="runtime-card">
-          <span className="label">runtime</span>
-          <div><i>数据根</i><span>{runtime?.root || "等待后端"}</span></div>
-          <div><i>API_KEY</i><span className={runtime?.api_key_exists ? "ok" : "warn"}>{runtime?.api_key_exists ? "已找到" : "未找到"}</span></div>
-        </div>
-      </aside>
-
       <main className="workspace">
         <header className="topbar">
-          <div className="kbstat">
-            {kbStats.map(([label, value]) => (
-              <div key={label}><span className="label">{label}</span><span className="v">{value}</span></div>
+          <div className="brand">
+            <div className="glyph"></div>
+            <div>
+              <b>Trending Fetcher</b>
+              <span className="label">single-window workstation</span>
+            </div>
+          </div>
+
+          <nav className="topnav" aria-label="功能切换">
+            {NAV.map((item) => (
+              <button key={item.id} className={page === item.id ? "active" : ""} onClick={() => setPage(item.id)}>
+                <b>{item.label}</b>
+                <span>{item.desc}</span>
+              </button>
+            ))}
+          </nav>
+
+          <div className="topstats">
+            {topStats.map((item) => (
+              <TopMetric key={item.label} label={item.label} value={item.value} tone={item.tone} />
             ))}
           </div>
           <span className={"conn " + (online === true ? "on" : online === false ? "off" : "")}>

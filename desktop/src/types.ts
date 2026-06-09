@@ -44,6 +44,7 @@ export interface RuntimeInfo {
   api_key: string;
   api_key_exists: boolean;
   today: string;
+  summary_models?: string[];
   proxy: ProxyStatus;
 }
 

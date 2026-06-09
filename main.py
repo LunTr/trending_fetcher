@@ -109,6 +109,9 @@ def record_arxiv_id(arxiv_id, date_str=None):
 ARXIV_HISTORY = load_arxiv_history()
 DOWNLOADED_ARXIV_IDS.update(ARXIV_HISTORY.keys())
 
+def today_arxiv_download_count():
+    return sum(1 for date_str in ARXIV_HISTORY.values() if date_str == TODAY)
+
 def configure_runtime(data_root=None, date_str=None):
     global TODAY, DATA_ROOT, ARXIV_HISTORY_FILE, GITHUB_HISTORY_FILE, ARXIV_HISTORY
 
@@ -299,6 +302,19 @@ def download_arxiv_pdf(arxiv_id, title, dir_path, reporter=None):
 def download_huggingface_daily_papers(reporter=None):
     log(reporter, "开始获取 HuggingFace Daily Papers...", stage="hf-list")
     dir_path = create_dir("HuggingFace")
+    today_count = today_arxiv_download_count()
+    remaining_quota = max(0, HF_DAILY_LIMIT - today_count)
+    emit(reporter, "stats", hf_today_downloaded=today_count, hf_daily_limit=HF_DAILY_LIMIT)
+    log(
+        reporter,
+        f"今日已下载 arXiv PDF {today_count}/{HF_DAILY_LIMIT}，剩余额度 {remaining_quota}。",
+        stage="hf-list",
+    )
+    if remaining_quota <= 0:
+        emit(reporter, "queue", stage="hf-pdf", current=0, total=0)
+        emit(reporter, "stats", hf_downloaded=0, hf_skipped_or_failed=0)
+        log(reporter, "今日下载数量已达上限，跳过 HuggingFace Daily Papers PDF 下载。", stage="hf-pdf")
+        return
     
     url = f"https://huggingface.co/api/daily_papers?date={TODAY}"
     try:
@@ -328,10 +344,10 @@ def download_huggingface_daily_papers(reporter=None):
             return bool(arxiv_id) and arxiv_id not in DOWNLOADED_ARXIV_IDS
 
         unique_papers = [p for p in papers_sorted if is_new_paper(p)]
-        selected = unique_papers[:HF_DAILY_LIMIT]
+        selected = unique_papers[:remaining_quota]
         log(
             reporter,
-            f"去重后 {len(unique_papers)} 篇Daily Papers，按上升数取前 {len(selected)} 篇。",
+            f"去重后 {len(unique_papers)} 篇Daily Papers，按剩余额度取前 {len(selected)} 篇。",
             stage="hf-list",
             total=len(selected),
         )
@@ -350,7 +366,14 @@ def download_huggingface_daily_papers(reporter=None):
                     downloaded_count += 1
                 else:
                     skipped_or_failed += 1
-        emit(reporter, "stats", hf_downloaded=downloaded_count, hf_skipped_or_failed=skipped_or_failed)
+        emit(
+            reporter,
+            "stats",
+            hf_downloaded=downloaded_count,
+            hf_skipped_or_failed=skipped_or_failed,
+            hf_today_downloaded=today_count + downloaded_count,
+            hf_daily_limit=HF_DAILY_LIMIT,
+        )
         log(reporter, "HuggingFace Daily Papers 抓取完成！\n", stage="hf-pdf")
     except Exception as e:
         log(reporter, f"抓取 HuggingFace Daily Papers 时出错: {e}\n", stage="hf-list", level="error")
