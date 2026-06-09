@@ -1,0 +1,11 @@
+beautifulsoup4
+certifi
+faiss-cpu
+fastapi
+numpy
+openai
+PyMuPDF
+requests
+urllib3
+uvicorn
+pyinstaller
