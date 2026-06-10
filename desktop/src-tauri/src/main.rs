@@ -1,7 +1,7 @@
 // Hide the extra console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::Mutex;
 
@@ -9,7 +9,7 @@ use tauri::Manager;
 
 struct Backend(Mutex<Option<Child>>);
 
-fn search_bases(app: &tauri::App) -> Vec<PathBuf> {
+fn search_bases(app: &tauri::AppHandle) -> Vec<PathBuf> {
     let mut bases: Vec<PathBuf> = Vec::new();
     if let Ok(cwd) = std::env::current_dir() {
         bases.push(cwd);
@@ -26,7 +26,7 @@ fn search_bases(app: &tauri::App) -> Vec<PathBuf> {
 }
 
 /// Locate the packaged Python backend executable.
-fn find_backend_exe(app: &tauri::App) -> Option<PathBuf> {
+fn find_backend_exe(app: &tauri::AppHandle) -> Option<PathBuf> {
     for base in search_bases(app) {
         let mut dir = base;
         for _ in 0..5 {
@@ -51,7 +51,7 @@ fn find_backend_exe(app: &tauri::App) -> Option<PathBuf> {
 }
 
 /// Locate kb_server.py in dev checkout or packaged resources.
-fn find_script(app: &tauri::App) -> Option<PathBuf> {
+fn find_script(app: &tauri::AppHandle) -> Option<PathBuf> {
     for base in search_bases(app) {
         let mut dir = base;
         for _ in 0..5 {
@@ -69,11 +69,41 @@ fn find_script(app: &tauri::App) -> Option<PathBuf> {
     None
 }
 
-fn resolve_data_dir(app: &tauri::App, backend_path: &PathBuf) -> PathBuf {
+fn config_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_local_data_dir()
+        .ok()
+        .map(|dir| dir.join("data_root.txt"))
+}
+
+fn configured_data_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let path = config_path(app)?;
+    let value = std::fs::read_to_string(path).ok()?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(trimmed))
+    }
+}
+
+fn save_configured_data_dir(app: &tauri::AppHandle, data_dir: &Path) -> Result<(), String> {
+    let path = config_path(app).ok_or_else(|| "Unable to resolve app data directory".to_string())?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    std::fs::write(path, data_dir.to_string_lossy().as_ref()).map_err(|err| err.to_string())
+}
+
+fn resolve_data_dir(app: &tauri::AppHandle, backend_path: &PathBuf) -> PathBuf {
     if let Ok(dir) = std::env::var("TRENDING_FETCHER_DATA_DIR") {
         if !dir.is_empty() {
             return PathBuf::from(dir);
         }
+    }
+
+    if let Some(dir) = configured_data_dir(app) {
+        return dir;
     }
 
     if let Some(code_dir) = backend_path.parent() {
@@ -104,7 +134,7 @@ fn hidden_command(program: &PathBuf) -> Command {
 }
 
 /// Start the resident Python search service, trying common interpreters in order.
-fn spawn_backend(app: &tauri::App) -> Option<Child> {
+fn spawn_backend(app: &tauri::AppHandle) -> Option<Child> {
     if let Some(backend_exe) = find_backend_exe(app) {
         let data_dir = resolve_data_dir(app, &backend_exe);
         let api_key = std::env::var("TRENDING_FETCHER_API_KEY")
@@ -158,11 +188,50 @@ fn spawn_backend(app: &tauri::App) -> Option<Child> {
     None
 }
 
+#[tauri::command]
+fn configure_api_key(
+    app: tauri::AppHandle,
+    backend: tauri::State<Backend>,
+    api_key_path: String,
+) -> Result<(), String> {
+    let api_key = PathBuf::from(api_key_path);
+    if !api_key.is_file() {
+        return Err("Selected path is not a file".to_string());
+    }
+    if api_key
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| !name.eq_ignore_ascii_case("API_KEY.json"))
+        .unwrap_or(true)
+    {
+        return Err("Please select API_KEY.json".to_string());
+    }
+    let data_dir = api_key
+        .parent()
+        .ok_or_else(|| "Unable to resolve API_KEY.json parent directory".to_string())?;
+    save_configured_data_dir(&app, data_dir)?;
+
+    let mut guard = backend.0.lock().map_err(|err| err.to_string())?;
+    if let Some(mut child) = guard.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    *guard = spawn_backend(&app);
+    if guard.is_some() {
+        Ok(())
+    } else {
+        Err("Saved data directory, but backend failed to restart".to_string())
+    }
+}
+
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![configure_api_key])
         .setup(|app| {
-            app.manage(Backend(Mutex::new(spawn_backend(app))));
+            let handle = app.handle().clone();
+            app.manage(Backend(Mutex::new(spawn_backend(&handle))));
             Ok(())
         })
         .build(tauri::generate_context!())
