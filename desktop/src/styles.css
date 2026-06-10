@@ -53,6 +53,10 @@ button{font-family:inherit;cursor:pointer}
   font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--ink-muted)}
 .conn.on{color:var(--ink-fg);border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 .conn.off{color:oklch(80% 0.12 35);border-color:oklch(55% 0.13 35)}
+.config-btn{border:1px solid var(--ink-border);background:transparent;color:var(--ink-fg);
+  border-radius:6px;padding:6px 10px;font-family:var(--mono);font-size:11.5px;white-space:nowrap}
+.config-btn:hover{border-color:var(--accent);background:oklch(32% 0.025 245)}
+.config-btn:disabled{opacity:.5;cursor:not-allowed}
 .topstats{display:flex;gap:18px;flex:1 1 420px;min-width:280px;align-items:center}
 .topstats div{display:flex;flex-direction:column;gap:2px;min-width:0}
 .topstats .label{color:var(--ink-muted)}

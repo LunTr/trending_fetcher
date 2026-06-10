@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import QueryPanel from "./QueryPanel";
 import ResultCard from "./ResultCard";
-import { fetchMeta, fetchRuntime, fetchTask, search, startTask } from "./api";
+import { chooseApiKey, fetchMeta, fetchRuntime, fetchTask, search, startTask } from "./api";
 import type { Meta, Mode, Page, Result, RuntimeInfo, TaskKind, TaskState } from "./types";
 
 const NAV: { id: Page; label: string; desc: string }[] = [
@@ -170,6 +170,7 @@ export default function App() {
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [task, setTask] = useState<TaskState | null>(null);
   const [online, setOnline] = useState<boolean | null>(null);
+  const [configuring, setConfiguring] = useState(false);
 
   useEffect(() => {
     let stop = false;
@@ -217,6 +218,40 @@ export default function App() {
     startTask(kind)
       .then((next) => setTask(next))
       .catch((e) => setTaskError(String(e.message || e)));
+  };
+
+  const refreshSnapshot = async () => {
+    let lastError: unknown;
+    for (let i = 0; i < 10; i += 1) {
+      try {
+        const [m, r, t] = await Promise.all([fetchMeta(), fetchRuntime(), fetchTask()]);
+        setMeta(m);
+        setRuntime(r);
+        setTask(t);
+        setOnline(true);
+        return;
+      } catch (e) {
+        lastError = e;
+        await new Promise((resolve) => window.setTimeout(resolve, 400));
+      }
+    }
+    throw lastError;
+  };
+
+  const selectApiKey = () => {
+    setTaskError("");
+    setConfiguring(true);
+    chooseApiKey()
+      .then((changed) => {
+        if (!changed) return;
+        setOnline(null);
+        return refreshSnapshot();
+      })
+      .catch((e) => {
+        setTaskError(String(e.message || e));
+        setOnline(false);
+      })
+      .finally(() => setConfiguring(false));
   };
 
   const topStats = useMemo(() => {
@@ -274,6 +309,9 @@ export default function App() {
           <span className={"conn " + (online === true ? "on" : online === false ? "off" : "")}>
             {online === true ? "● 已连接" : online === false ? "● 后端启动中" : "● 连接中"}
           </span>
+          <button className="config-btn" disabled={configuring || task?.status === "running"} onClick={selectApiKey}>
+            {configuring ? "选择中" : "API_KEY"}
+          </button>
         </header>
 
         {taskError && <div className="task-error">{taskError}</div>}

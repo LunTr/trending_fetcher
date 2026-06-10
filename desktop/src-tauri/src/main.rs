@@ -96,14 +96,14 @@ fn save_configured_data_dir(app: &tauri::AppHandle, data_dir: &Path) -> Result<(
 }
 
 fn resolve_data_dir(app: &tauri::AppHandle, backend_path: &PathBuf) -> PathBuf {
+    if let Some(dir) = configured_data_dir(app) {
+        return dir;
+    }
+
     if let Ok(dir) = std::env::var("TRENDING_FETCHER_DATA_DIR") {
         if !dir.is_empty() {
             return PathBuf::from(dir);
         }
-    }
-
-    if let Some(dir) = configured_data_dir(app) {
-        return dir;
     }
 
     if let Some(code_dir) = backend_path.parent() {
