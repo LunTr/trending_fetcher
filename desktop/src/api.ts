@@ -1,3 +1,5 @@
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { openPath } from "@tauri-apps/plugin-opener";
 import type { Meta, Mode, Result, RuntimeInfo, TaskKind, TaskState } from "./types";
 
@@ -28,6 +30,17 @@ export async function startTask(kind: TaskKind): Promise<TaskState> {
     throw new Error(body || `HTTP ${r.status}`);
   }
   return r.json();
+}
+
+export async function chooseApiKey(): Promise<boolean> {
+  const selected = await open({
+    multiple: false,
+    title: "Select API_KEY.json",
+    filters: [{ name: "API_KEY.json", extensions: ["json"] }],
+  });
+  if (!selected || Array.isArray(selected)) return false;
+  await invoke("configure_api_key", { apiKeyPath: selected });
+  return true;
 }
 
 export async function search(keywords: string[], mode: Mode, top: number): Promise<Result[]> {
