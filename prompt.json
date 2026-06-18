@@ -74,6 +74,6 @@
   },
   "test_api_connection": {
     "comment": "summarize.py / best.py: test_api_connection - API连通性测试",
-    "user": "hello"
+    "user": "1+1=?"
   }
 }
