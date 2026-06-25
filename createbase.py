@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import time
 
 import fitz
 
@@ -110,6 +111,7 @@ def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=
             model_client,
             np,
             faiss,
+            total_records=len(existing_chunk_ids),
             reporter=reporter,
         )
     if index is not None:
@@ -129,6 +131,7 @@ def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=
                 model_client,
                 np,
                 faiss,
+                total_records=stored_chunks,
                 reporter=reporter,
             )
         else:
@@ -151,6 +154,7 @@ def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=
             model_client,
             np,
             faiss,
+            total_records=len(existing_chunk_ids),
             reporter=reporter,
         )
     next_id = max(meta.get("next_id", 1), max_vector_id + 1)
@@ -288,7 +292,7 @@ def new_meta(embed_model):
     }
 
 
-def rebuild_index_from_doc_store(doc_store_path, index_path, meta_path, embed_model, model_client, np, faiss, reporter=None):
+def rebuild_index_from_doc_store(doc_store_path, index_path, meta_path, embed_model, model_client, np, faiss, total_records=None, reporter=None):
     meta = new_meta(embed_model)
     if not os.path.exists(doc_store_path):
         report_log(
@@ -303,6 +307,13 @@ def rebuild_index_from_doc_store(doc_store_path, index_path, meta_path, embed_mo
     batch = []
     recovered = 0
     max_vector_id = 0
+    total_label = str(total_records) if total_records is not None else "unknown"
+    last_log = time.monotonic()
+    report_log(
+        reporter,
+        f"[*] Rebuilding FAISS index from doc_store.jsonl: 0/{total_label} chunks recovered...",
+        stage="kb-build",
+    )
 
     for record in iter_doc_store_records(doc_store_path):
         batch.append(record)
@@ -311,6 +322,15 @@ def rebuild_index_from_doc_store(doc_store_path, index_path, meta_path, embed_mo
             recovered += added
             max_vector_id = max(max_vector_id, batch_max_id)
             emit(reporter, "kb_rebuild_progress", stage="kb-build", recovered_chunks=recovered)
+            if recovered % 2048 == 0 or time.monotonic() - last_log >= 30:
+                report_log(
+                    reporter,
+                    f"[*] Rebuilding FAISS index from doc_store.jsonl: {recovered}/{total_label} chunks recovered...",
+                    stage="kb-build",
+                    recovered_chunks=recovered,
+                    total_chunks=total_records,
+                )
+                last_log = time.monotonic()
             batch = []
 
     if batch:
@@ -318,6 +338,13 @@ def rebuild_index_from_doc_store(doc_store_path, index_path, meta_path, embed_mo
         recovered += added
         max_vector_id = max(max_vector_id, batch_max_id)
         emit(reporter, "kb_rebuild_progress", stage="kb-build", recovered_chunks=recovered)
+        report_log(
+            reporter,
+            f"[*] Rebuilding FAISS index from doc_store.jsonl: {recovered}/{total_label} chunks recovered...",
+            stage="kb-build",
+            recovered_chunks=recovered,
+            total_chunks=total_records,
+        )
 
     if index is None:
         report_log(
