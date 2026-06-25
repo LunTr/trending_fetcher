@@ -108,7 +108,7 @@ class TaskManager:
             }
 
     def start(self, kind):
-        if kind not in {"main", "summarize", "kb-build"}:
+        if kind not in {"main", "summarize", "kb-build", "kb-refresh"}:
             raise HTTPException(status_code=404, detail="Unknown task")
         with self.lock:
             if self.state.get("status") == "running":
@@ -191,7 +191,8 @@ class TaskManager:
             else:
                 import createbase
                 source_dir = os.path.join(ROOT, today_str())
-                createbase.build_kb(source_dir=source_dir, kb_dir=KB_DIR, api_key_path=API_KEY, reporter=reporter)
+                refresh = kind == "kb-refresh"
+                createbase.build_kb(source_dir=source_dir, kb_dir=KB_DIR, api_key_path=API_KEY, refresh=refresh, reporter=reporter)
             self.finish(task_id, "succeeded", "任务完成")
         except Exception as exc:
             reporter({

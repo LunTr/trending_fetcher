@@ -170,7 +170,11 @@ def search_kb(query, keywords, kb_dir, api_key_path, top_k, mode="auto"):
         return []
 
     if meta.get("embedding_model") != embed_model:
-        print("[!] Embedding model mismatch. Rebuild index to continue.")
+        print(
+            "[!] Embedding model mismatch "
+            f"(index: {meta.get('embedding_model')}, config: {embed_model}). "
+            "Run `python createbase.py --refresh` to re-embed the existing chunks."
+        )
         return []
 
     try:

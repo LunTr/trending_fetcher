@@ -27,7 +27,7 @@ export interface Meta {
 export type Mode = "auto" | "vector" | "keyword";
 
 export type Page = "main" | "summarize" | "kb";
-export type TaskKind = "main" | "summarize" | "kb-build";
+export type TaskKind = "main" | "summarize" | "kb-build" | "kb-refresh";
 export type TaskStatus = "idle" | "running" | "succeeded" | "failed";
 
 export interface ProxyStatus {

@@ -176,6 +176,7 @@ button{font-family:inherit;cursor:pointer}
   padding:11px 17px;font-weight:650;white-space:nowrap}
 .primary-action:hover{background:var(--accent-ink)}
 .primary-action:disabled{opacity:.48;cursor:not-allowed}
+.kb-action-buttons{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start}
 .primary-action.ghost{background:var(--surface);color:var(--accent-ink)}
 .primary-action.ghost:hover{background:var(--accent-wash)}
 .status-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-bottom:10px}

@@ -28,6 +28,21 @@ class CorruptIndexError(RuntimeError):
     pass
 
 
+class EmbeddingModelChangedError(RuntimeError):
+    """Raised when the configured embedding model differs from the one used to build the index.
+
+    The stored vectors are tied to the old embedding model, but the chunk text in
+    doc_store.jsonl can be re-embedded with the new model, so this is recoverable.
+    """
+
+    def __init__(self, old_model, new_model):
+        self.old_model = old_model
+        self.new_model = new_model
+        super().__init__(
+            f"Embedding model changed ({old_model or 'unknown'} -> {new_model})."
+        )
+
+
 def emit(reporter, event, **payload):
     if reporter:
         reporter({"event": event, **payload})
@@ -53,7 +68,7 @@ def remove_corrupt_file(file_path, reason=None):
             print(f"[!] Failed to delete corrupt file: {base_name} ({exc})")
 
 
-def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=DEFAULT_API_KEY_PATH, rebuild=False, reporter=None):
+def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=DEFAULT_API_KEY_PATH, rebuild=False, refresh=False, reporter=None):
     try:
         import numpy as np
     except Exception:
@@ -67,8 +82,17 @@ def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=
         return
 
     if not os.path.exists(source_dir):
-        report_log(reporter, f"[!] Source directory not found: {source_dir}", stage="kb-build", level="error")
-        return
+        if refresh:
+            report_log(
+                reporter,
+                f"[*] Source directory not found ({source_dir}); refresh will re-embed existing chunks only.",
+                stage="kb-build",
+                level="warning",
+            )
+            source_dir = None
+        else:
+            report_log(reporter, f"[!] Source directory not found: {source_dir}", stage="kb-build", level="error")
+            return
     emit(reporter, "stage", stage="kb-build", source_dir=source_dir, kb_dir=kb_dir)
 
     os.makedirs(kb_dir, exist_ok=True)
@@ -85,6 +109,18 @@ def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=
             os.remove(meta_path)
         if os.path.exists(doc_store_path):
             os.remove(doc_store_path)
+    elif refresh:
+        # Refresh keeps the parsed chunk text (doc_store.jsonl) but drops the stale
+        # FAISS vectors + meta so they get rebuilt with the current embedding model.
+        if os.path.exists(index_path):
+            os.remove(index_path)
+        if os.path.exists(meta_path):
+            os.remove(meta_path)
+        report_log(
+            reporter,
+            "[*] Refresh requested: re-embedding existing chunks with the current embedding model.",
+            stage="kb-build",
+        )
 
     model_client = ModelClient.from_config_path(api_key_path)
     embed_model = model_client.embedding_conf.get("model")
@@ -96,6 +132,24 @@ def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=
 
     try:
         index, meta = load_or_create_index(index_path, meta_path, embed_model)
+    except EmbeddingModelChangedError as exc:
+        report_log(
+            reporter,
+            f"[*] {exc} Re-embedding existing chunks with the new embedding model...",
+            stage="kb-build",
+            level="warning",
+        )
+        index, meta = rebuild_index_from_doc_store(
+            doc_store_path,
+            index_path,
+            meta_path,
+            embed_model,
+            model_client,
+            np,
+            faiss,
+            total_records=len(existing_chunk_ids),
+            reporter=reporter,
+        )
     except CorruptIndexError as exc:
         report_log(
             reporter,
@@ -264,7 +318,7 @@ def load_or_create_index(index_path, meta_path, embed_model):
         with open(meta_path, "r", encoding="utf-8") as f:
             meta = json.load(f)
         if meta.get("embedding_model") != embed_model:
-            raise RuntimeError("Embedding model changed. Rebuild index to continue.")
+            raise EmbeddingModelChangedError(meta.get("embedding_model"), embed_model)
         try:
             index = faiss.read_index(index_path)
         except Exception as exc:
@@ -480,6 +534,8 @@ def load_existing_chunk_ids(doc_store_path):
 
 
 def iter_paper_files(source_dir):
+    if not source_dir:
+        return
     for root, _, files in os.walk(source_dir):
         for name in files:
             if name.endswith(SKIP_SUFFIXES):
@@ -784,7 +840,11 @@ def main():
     parser.add_argument("--source", default=DEFAULT_SOURCE_DIR)
     parser.add_argument("--kb-dir", default=DEFAULT_KB_DIR)
     parser.add_argument("--api", default=DEFAULT_API_KEY_PATH)
-    parser.add_argument("--rebuild", action="store_true")
+    parser.add_argument("--rebuild", action="store_true",
+                        help="Wipe index, meta and doc_store.jsonl, then re-parse sources from scratch.")
+    parser.add_argument("--refresh", action="store_true",
+                        help="Keep parsed chunks (doc_store.jsonl) but re-embed them with the current "
+                             "embedding model. Use after changing the embedding model.")
     args = parser.parse_args()
 
     build_kb(
@@ -792,6 +852,7 @@ def main():
         kb_dir=args.kb_dir,
         api_key_path=args.api,
         rebuild=args.rebuild,
+        refresh=args.refresh,
     )
 
 

@@ -23,6 +23,7 @@ const STAGE_LABELS: Record<string, string> = {
   "pdf-summary": "PDF 摘要",
   "readme-translate": "README 翻译",
   "kb-build": "知识库构建",
+  "kb-refresh": "知识库刷新",
   failed: "失败",
 };
 
@@ -342,11 +343,16 @@ export default function App() {
               <div>
                 <span className="label">knowledge base</span>
                 <h1>知识库检索</h1>
-                <p>保留原有搜索接口和本地文件打开能力；需要时可手动触发当天目录增量建库。</p>
+                <p>保留原有搜索接口和本地文件打开能力；需要时可手动触发当天目录增量建库。更换嵌入模型后用“重建嵌入”刷新索引。</p>
               </div>
-              <button className="primary-action ghost" disabled={task?.status === "running"} onClick={() => launchTask("kb-build")}>
-                {task?.status === "running" ? "任务运行中" : "增量建库"}
-              </button>
+              <div className="kb-action-buttons">
+                <button className="primary-action ghost" disabled={task?.status === "running"} onClick={() => launchTask("kb-build")}>
+                  {task?.status === "running" ? "任务运行中" : "增量建库"}
+                </button>
+                <button className="primary-action ghost" disabled={task?.status === "running"} onClick={() => launchTask("kb-refresh")}>
+                  重建嵌入
+                </button>
+              </div>
             </div>
 
             <div className="layout kb-layout">
