@@ -173,7 +173,15 @@ def search_kb(query, keywords, kb_dir, api_key_path, top_k, mode="auto"):
         print("[!] Embedding model mismatch. Rebuild index to continue.")
         return []
 
-    index = faiss.read_index(index_path)
+    try:
+        index = faiss.read_index(index_path)
+    except Exception as exc:
+        if mode == "vector":
+            print(f"[!] Vector index is unreadable: {exc}")
+            return []
+        print(f"[!] Vector index is unreadable, falling back to keyword search: {exc}")
+        return keyword_search(doc_store_path, keywords, top_k)
+
     try:
         query_vec = model_client.embed_texts([query])[0]
     except Exception as exc:

@@ -23,6 +23,10 @@ DEFAULT_API_KEY_PATH = os.path.abspath(
 )
 
 
+class CorruptIndexError(RuntimeError):
+    pass
+
+
 def emit(reporter, event, **payload):
     if reporter:
         reporter({"event": event, **payload})
@@ -70,6 +74,8 @@ def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=
     index_path = os.path.join(kb_dir, "vectors.faiss")
     meta_path = os.path.join(kb_dir, "index_meta.json")
     doc_store_path = os.path.join(kb_dir, "doc_store.jsonl")
+    index_dirty = False
+    meta_dirty = False
 
     if rebuild:
         if os.path.exists(index_path):
@@ -85,9 +91,72 @@ def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=
         print("[!] Embedding model is not configured in API_KEY.json.")
         return
 
-    index, meta = load_or_create_index(index_path, meta_path, embed_model)
     existing_chunk_ids, max_vector_id = load_existing_chunk_ids(doc_store_path)
-    meta["next_id"] = max(meta.get("next_id", 1), max_vector_id + 1)
+
+    try:
+        index, meta = load_or_create_index(index_path, meta_path, embed_model)
+    except CorruptIndexError as exc:
+        report_log(
+            reporter,
+            f"[!] Existing FAISS index is unreadable; rebuilding it from doc_store.jsonl. {exc}",
+            stage="kb-build",
+            level="warning",
+        )
+        index, meta = rebuild_index_from_doc_store(
+            doc_store_path,
+            index_path,
+            meta_path,
+            embed_model,
+            model_client,
+            np,
+            faiss,
+            reporter=reporter,
+        )
+    if index is not None:
+        stored_chunks = len(existing_chunk_ids)
+        if int(index.ntotal) != stored_chunks:
+            report_log(
+                reporter,
+                f"[!] FAISS/doc_store mismatch: index has {int(index.ntotal)} vectors, doc_store has {stored_chunks} chunks. Rebuilding index.",
+                stage="kb-build",
+                level="warning",
+            )
+            index, meta = rebuild_index_from_doc_store(
+                doc_store_path,
+                index_path,
+                meta_path,
+                embed_model,
+                model_client,
+                np,
+                faiss,
+                reporter=reporter,
+            )
+        else:
+            current_total = int(index.ntotal)
+            if meta.get("total_vectors") != current_total:
+                meta["total_vectors"] = current_total
+                meta_dirty = True
+    elif existing_chunk_ids:
+        report_log(
+            reporter,
+            "[!] FAISS index is missing while doc_store.jsonl has records. Rebuilding index.",
+            stage="kb-build",
+            level="warning",
+        )
+        index, meta = rebuild_index_from_doc_store(
+            doc_store_path,
+            index_path,
+            meta_path,
+            embed_model,
+            model_client,
+            np,
+            faiss,
+            reporter=reporter,
+        )
+    next_id = max(meta.get("next_id", 1), max_vector_id + 1)
+    if meta.get("next_id") != next_id:
+        meta["next_id"] = next_id
+        meta_dirty = True
 
     pending_records = []
     total_new = 0
@@ -143,6 +212,7 @@ def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=
                         meta_path,
                         np,
                     )
+                    index_dirty = True
                     total_new += added
                     emit(reporter, "kb_progress", stage="kb-build", added_chunks=total_new, total_vectors=meta.get("total_vectors"))
                     for rec in pending_records:
@@ -159,6 +229,7 @@ def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=
             meta_path,
             np,
         )
+        index_dirty = True
         total_new += added
         emit(reporter, "kb_progress", stage="kb-build", added_chunks=total_new, total_vectors=meta.get("total_vectors"))
         for rec in pending_records:
@@ -168,8 +239,11 @@ def build_kb(source_dir=DEFAULT_SOURCE_DIR, kb_dir=DEFAULT_KB_DIR, api_key_path=
         report_log(reporter, "[!] No vectors were created. Check source directory and parsers.", stage="kb-build")
         return
 
-    faiss.write_index(index, index_path)
-    save_meta(meta_path, meta)
+    if index_dirty:
+        write_index_atomic(index, index_path, faiss)
+        save_meta(meta_path, meta)
+    elif meta_dirty:
+        save_meta(meta_path, meta)
 
     report_log(reporter, f"[+] KB build complete. Added {total_new} new chunks.", stage="kb-build", added_chunks=total_new)
 
@@ -187,7 +261,10 @@ def load_or_create_index(index_path, meta_path, embed_model):
             meta = json.load(f)
         if meta.get("embedding_model") != embed_model:
             raise RuntimeError("Embedding model changed. Rebuild index to continue.")
-        index = faiss.read_index(index_path)
+        try:
+            index = faiss.read_index(index_path)
+        except Exception as exc:
+            raise CorruptIndexError(f"{index_path}: {exc}") from exc
         return index, meta
 
     meta = {
@@ -199,6 +276,111 @@ def load_or_create_index(index_path, meta_path, embed_model):
     }
     index = None
     return index, meta
+
+
+def new_meta(embed_model):
+    return {
+        "embedding_model": embed_model,
+        "dimension": None,
+        "total_vectors": 0,
+        "next_id": 1,
+        "updated_at": None,
+    }
+
+
+def rebuild_index_from_doc_store(doc_store_path, index_path, meta_path, embed_model, model_client, np, faiss, reporter=None):
+    meta = new_meta(embed_model)
+    if not os.path.exists(doc_store_path):
+        report_log(
+            reporter,
+            "[!] doc_store.jsonl not found; starting a fresh KB index.",
+            stage="kb-build",
+            level="warning",
+        )
+        return None, meta
+
+    index = None
+    batch = []
+    recovered = 0
+    max_vector_id = 0
+
+    for record in iter_doc_store_records(doc_store_path):
+        batch.append(record)
+        if len(batch) >= 64:
+            index, added, batch_max_id = add_existing_records_to_index(batch, model_client, index, meta, np, faiss)
+            recovered += added
+            max_vector_id = max(max_vector_id, batch_max_id)
+            emit(reporter, "kb_rebuild_progress", stage="kb-build", recovered_chunks=recovered)
+            batch = []
+
+    if batch:
+        index, added, batch_max_id = add_existing_records_to_index(batch, model_client, index, meta, np, faiss)
+        recovered += added
+        max_vector_id = max(max_vector_id, batch_max_id)
+        emit(reporter, "kb_rebuild_progress", stage="kb-build", recovered_chunks=recovered)
+
+    if index is None:
+        report_log(
+            reporter,
+            "[!] doc_store.jsonl has no usable records; starting a fresh KB index.",
+            stage="kb-build",
+            level="warning",
+        )
+        return None, meta
+
+    meta["next_id"] = max_vector_id + 1
+    meta["total_vectors"] = int(index.ntotal)
+    meta["updated_at"] = datetime.datetime.now().isoformat()
+    write_index_atomic(index, index_path, faiss)
+    save_meta(meta_path, meta)
+    report_log(
+        reporter,
+        f"[+] Rebuilt FAISS index from doc_store.jsonl. Recovered {recovered} chunks.",
+        stage="kb-build",
+        recovered_chunks=recovered,
+    )
+    return index, meta
+
+
+def iter_doc_store_records(doc_store_path):
+    with open(doc_store_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except Exception:
+                continue
+            if not record.get("text"):
+                continue
+            vector_id = record.get("vector_id")
+            if not isinstance(vector_id, int):
+                continue
+            yield record
+
+
+def add_existing_records_to_index(records, model_client, index, meta, np, faiss):
+    texts = [record["text"] for record in records]
+    vectors = model_client.embed_texts(texts)
+    vectors_np = np.array(vectors, dtype="float32")
+    vectors_np = normalize_vectors(vectors_np, np)
+
+    if index is None:
+        dimension = vectors_np.shape[1]
+        meta["dimension"] = dimension
+        base_index = faiss.IndexFlatIP(dimension)
+        index = faiss.IndexIDMap2(base_index)
+
+    if meta.get("dimension") and vectors_np.shape[1] != meta["dimension"]:
+        raise RuntimeError("Embedding dimension mismatch while rebuilding index.")
+
+    vector_ids = [int(record["vector_id"]) for record in records]
+    ids_np = np.array(vector_ids, dtype="int64")
+    index.add_with_ids(vectors_np, ids_np)
+    meta["total_vectors"] = int(index.ntotal)
+    meta["updated_at"] = datetime.datetime.now().isoformat()
+    return index, len(records), max(vector_ids)
 
 
 def flush_batch(records, model_client, index, meta, doc_store_path, meta_path, np):
@@ -548,8 +730,26 @@ def find_date_in_path(path):
 
 
 def save_meta(meta_path, meta):
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+    tmp_path = f"{meta_path}.{os.getpid()}.tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, meta_path)
+    finally:
+        if os.path.exists(tmp_path):
+            with contextlib.suppress(Exception):
+                os.remove(tmp_path)
+
+
+def write_index_atomic(index, index_path, faiss):
+    tmp_path = f"{index_path}.{os.getpid()}.tmp"
+    try:
+        faiss.write_index(index, tmp_path)
+        os.replace(tmp_path, index_path)
+    finally:
+        if os.path.exists(tmp_path):
+            with contextlib.suppress(Exception):
+                os.remove(tmp_path)
 
 
 def main():
