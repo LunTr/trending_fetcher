@@ -97,7 +97,12 @@ class KnowledgeBaseRecoveryTests(unittest.TestCase):
         self.build()
         index_path = os.path.join(self.kb_dir, "vectors.faiss")
         index = faiss.read_index(index_path)
+        stale_vector = index.reconstruct(3)
         index.remove_ids(np.asarray([3], dtype="int64"))
+        index.add_with_ids(
+            np.asarray([stale_vector], dtype="float32"),
+            np.asarray([99], dtype="int64"),
+        )
         faiss.write_index(index, index_path)
 
         for pattern in ("embedding_cache_*.sqlite3*", "chunk_store.sqlite3*"):
@@ -109,7 +114,9 @@ class KnowledgeBaseRecoveryTests(unittest.TestCase):
         self.build()
 
         self.assertEqual(sum(self.calls), 1)
-        self.assertEqual(faiss.read_index(index_path).ntotal, 3)
+        repaired = faiss.read_index(index_path)
+        self.assertEqual(repaired.ntotal, 3)
+        self.assertEqual(createbase.get_index_vector_ids(repaired, faiss), {1, 2, 3})
 
 
 if __name__ == "__main__":
