@@ -17,6 +17,8 @@
 - YYYY-MM-DD/HuggingFace/论文标题_id.pdf 与 论文标题_id_summary.md
 - YYYY-MM-DD/HuggingFace/llm_paper_selection.json 与 *_source.tar.gz
 - kb_store 下保存向量索引与文档库
+- kb_store/chunk_store.sqlite3 保存可恢复的 chunk 权威副本
+- kb_store/embedding_cache_<model>.sqlite3 保存可复用的 embedding 向量缓存
 
 ## 使用方法
 
@@ -49,6 +51,8 @@ python createbase.py --source 2026-05-30 --kb-dir kb_store --api API_KEY.json
 python baseall.py --root . --kb-dir kb_store --api API_KEY.json
 python search.py llm,agent --top 10 --kb-dir kb_store --api API_KEY.json --mode auto
 ```
+
+知识库恢复说明：`vectors.faiss` 是可重建的派生索引。索引丢失或数量不一致时，构建器会优先从本地 embedding 缓存恢复，只对缓存缺失的 chunk 调用 embedding 服务；`doc_store.jsonl` 损坏时会从 `chunk_store.sqlite3` 恢复。首次升级到该恢复机制时，会从现有 FAISS 索引本地回填缓存，不会重复请求已有向量。
 
 ## 桌面查询应用（Tauri 单窗口）
 

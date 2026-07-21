@@ -34,14 +34,13 @@ def main():
         print("[!] No date folders found.")
         return
 
-    for date_dir in date_dirs:
-        print(f"[+] Processing {date_dir}")
-        createbase.build_kb(
-            source_dir=date_dir,
-            kb_dir=args.kb_dir,
-            api_key_path=args.api,
-            rebuild=False,
-        )
+    print(f"[+] Processing {len(date_dirs)} date folders under {args.root}")
+    createbase.build_kb(
+        source_dir=date_dirs,
+        kb_dir=args.kb_dir,
+        api_key_path=args.api,
+        rebuild=False,
+    )
 
 
 if __name__ == "__main__":

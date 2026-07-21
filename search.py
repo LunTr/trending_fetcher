@@ -3,6 +3,7 @@ import heapq
 import json
 import os
 import re
+import sqlite3
 
 from model_client import ModelClient
 
@@ -43,7 +44,33 @@ def load_meta(meta_path):
 
 def load_records_by_ids(doc_store_path, target_ids):
     records = {}
-    if not target_ids or not os.path.exists(doc_store_path):
+    if not target_ids:
+        return records
+
+    chunk_store_path = os.path.join(os.path.dirname(doc_store_path), "chunk_store.sqlite3")
+    if os.path.exists(chunk_store_path):
+        try:
+            with sqlite3.connect(chunk_store_path, timeout=5) as conn:
+                ids = list(target_ids)
+                for start in range(0, len(ids), 800):
+                    batch = ids[start:start + 800]
+                    placeholders = ",".join("?" for _ in batch)
+                    rows = conn.execute(
+                        f"SELECT vector_id, record_json FROM records "
+                        f"WHERE vector_id IN ({placeholders})",
+                        batch,
+                    )
+                    for vector_id, record_json in rows:
+                        try:
+                            records[int(vector_id)] = json.loads(record_json)
+                        except Exception:
+                            continue
+        except sqlite3.DatabaseError:
+            records = {}
+        if len(records) == len(target_ids):
+            return records
+
+    if not os.path.exists(doc_store_path):
         return records
 
     with open(doc_store_path, "r", encoding="utf-8") as f:
@@ -83,35 +110,28 @@ def keyword_search(doc_store_path, keywords, top_k):
     if not keywords:
         print("[!] Empty keywords.")
         return []
-    if not os.path.exists(doc_store_path):
+    chunk_store_path = os.path.join(os.path.dirname(doc_store_path), "chunk_store.sqlite3")
+    if not os.path.exists(doc_store_path) and not os.path.exists(chunk_store_path):
         print(f"[!] Missing doc store: {doc_store_path}")
         return []
 
     heap = []
     idx = 0
-    with open(doc_store_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except Exception:
-                continue
-            title = record.get("title") or ""
-            file_name = record.get("file_name") or ""
-            text = record.get("text") or ""
-            haystack = f"{title}\n{file_name}\n{text}"
-            score = keyword_score(haystack, keywords)
-            if score <= 0:
-                continue
-            entry = (score, idx, record)
-            idx += 1
-            if len(heap) < top_k:
-                heapq.heappush(heap, entry)
-            else:
-                if entry > heap[0]:
-                    heapq.heapreplace(heap, entry)
+    for record in iter_stored_records(doc_store_path):
+        title = record.get("title") or ""
+        file_name = record.get("file_name") or ""
+        text = record.get("text") or ""
+        haystack = f"{title}\n{file_name}\n{text}"
+        score = keyword_score(haystack, keywords)
+        if score <= 0:
+            continue
+        entry = (score, idx, record)
+        idx += 1
+        if len(heap) < top_k:
+            heapq.heappush(heap, entry)
+        else:
+            if entry > heap[0]:
+                heapq.heapreplace(heap, entry)
 
     if not heap:
         return []
@@ -124,6 +144,39 @@ def keyword_search(doc_store_path, keywords, top_k):
             "record": record,
         })
     return results
+
+
+def iter_stored_records(doc_store_path):
+    chunk_store_path = os.path.join(os.path.dirname(doc_store_path), "chunk_store.sqlite3")
+    if os.path.exists(chunk_store_path):
+        conn = None
+        try:
+            conn = sqlite3.connect(chunk_store_path, timeout=5)
+            for (record_json,) in conn.execute(
+                "SELECT record_json FROM records ORDER BY vector_id"
+            ):
+                try:
+                    yield json.loads(record_json)
+                except Exception:
+                    continue
+            return
+        except sqlite3.DatabaseError:
+            pass
+        finally:
+            if conn is not None:
+                conn.close()
+
+    if not os.path.exists(doc_store_path):
+        return
+    with open(doc_store_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except Exception:
+                continue
 
 
 def search_kb(query, keywords, kb_dir, api_key_path, top_k, mode="auto"):
