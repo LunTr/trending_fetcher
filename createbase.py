@@ -46,6 +46,14 @@ class EmbeddingModelChangedError(RuntimeError):
         )
 
 
+def quarantine_sqlite_file(path):
+    stamp = int(time.time())
+    for candidate in (path, f"{path}-wal", f"{path}-shm"):
+        if os.path.exists(candidate):
+            with contextlib.suppress(Exception):
+                os.replace(candidate, f"{candidate}.corrupt.{stamp}")
+
+
 class EmbeddingCache:
     """Durable normalized embeddings keyed by chunk content and model.
 
@@ -74,9 +82,7 @@ class EmbeddingCache:
         except sqlite3.DatabaseError:
             with contextlib.suppress(Exception):
                 self.conn.close()
-            corrupt_path = f"{self.path}.corrupt.{int(time.time())}"
-            with contextlib.suppress(Exception):
-                os.replace(self.path, corrupt_path)
+            quarantine_sqlite_file(self.path)
             self.conn = sqlite3.connect(self.path, timeout=60)
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA synchronous=FULL")
@@ -176,9 +182,7 @@ class ChunkStore:
         except sqlite3.DatabaseError:
             with contextlib.suppress(Exception):
                 self.conn.close()
-            corrupt_path = f"{self.path}.corrupt.{int(time.time())}"
-            with contextlib.suppress(Exception):
-                os.replace(self.path, corrupt_path)
+            quarantine_sqlite_file(self.path)
             self.conn = sqlite3.connect(self.path, timeout=60)
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.execute("PRAGMA synchronous=FULL")
