@@ -11,6 +11,7 @@ import string
 import re
 import urllib3
 import json
+import fitz
 
 # 禁用安全请求警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -235,53 +236,88 @@ def download_arxiv_pdf(arxiv_id, title, dir_path, reporter=None):
         record_arxiv_id(arxiv_id)
         return False
     
-    try:
-        log(
-            reporter,
-            f"  [+] 正在下载 PDF: {arxiv_id} ...",
-            stage="hf-pdf",
-            arxiv_id=arxiv_id,
-            title=title,
-            file_path=file_path,
-        )
-        res = session.get(pdf_url, stream=True, timeout=30)
-        res.raise_for_status()
-        total = int(res.headers.get("content-length") or 0)
-        downloaded = 0
-        last_emit = 0
-        emit(
-            reporter,
-            "download_start",
-            stage="hf-pdf",
-            arxiv_id=arxiv_id,
-            title=title,
-            file_name=os.path.basename(file_path),
-            file_path=file_path,
-            downloaded_bytes=0,
-            total_bytes=total,
-            percent=0 if total else None,
-        )
-        with open(file_path, 'wb') as f:
-            for chunk in res.iter_content(chunk_size=8192):
-                if not chunk:
-                    continue
-                f.write(chunk)
-                downloaded += len(chunk)
-                if downloaded - last_emit >= 262144 or (total and downloaded >= total):
-                    last_emit = downloaded
-                    emit(
-                        reporter,
-                        "download_progress",
-                        stage="hf-pdf",
-                        arxiv_id=arxiv_id,
-                        title=title,
-                        file_name=os.path.basename(file_path),
-                        file_path=file_path,
-                        downloaded_bytes=downloaded,
-                        total_bytes=total,
-                        percent=round(downloaded * 100 / total, 1) if total else None,
-                    )
-        record_arxiv_id(arxiv_id)
+    temp_path = f"{file_path}.part"
+    for attempt in range(1, 3):
+        try:
+            log(
+                reporter,
+                f"  [+] 正在下载 PDF: {arxiv_id} ...",
+                stage="hf-pdf",
+                arxiv_id=arxiv_id,
+                title=title,
+                file_path=file_path,
+            )
+            res = session.get(pdf_url, stream=True, timeout=30)
+            res.raise_for_status()
+            total = int(res.headers.get("content-length") or 0)
+            downloaded = 0
+            last_emit = 0
+            emit(
+                reporter,
+                "download_start",
+                stage="hf-pdf",
+                arxiv_id=arxiv_id,
+                title=title,
+                file_name=os.path.basename(file_path),
+                file_path=file_path,
+                downloaded_bytes=0,
+                total_bytes=total,
+                percent=0 if total else None,
+            )
+            with open(temp_path, 'wb') as f:
+                for chunk in res.iter_content(chunk_size=8192):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if downloaded - last_emit >= 262144 or (total and downloaded >= total):
+                        last_emit = downloaded
+                        emit(
+                            reporter,
+                            "download_progress",
+                            stage="hf-pdf",
+                            arxiv_id=arxiv_id,
+                            title=title,
+                            file_name=os.path.basename(file_path),
+                            file_path=file_path,
+                            downloaded_bytes=downloaded,
+                            total_bytes=total,
+                            percent=round(downloaded * 100 / total, 1) if total else None,
+                        )
+        except Exception as e:
+            remove_file_if_exists(temp_path)
+            log(reporter, f"  [!] 下载失败 {arxiv_id}: {e}", stage="hf-pdf", arxiv_id=arxiv_id, level="error")
+            return False
+
+        try:
+            validate_downloaded_pdf(temp_path)
+        except Exception as e:
+            remove_file_if_exists(temp_path)
+            if attempt < 2:
+                log(
+                    reporter,
+                    f"  [!] PDF 解析失败，正在重新抓取 {arxiv_id}: {e}",
+                    stage="hf-pdf",
+                    arxiv_id=arxiv_id,
+                    level="warning",
+                )
+                continue
+            log(
+                reporter,
+                f"  [!] PDF 重新抓取后仍无法解析 {arxiv_id}: {e}",
+                stage="hf-pdf",
+                arxiv_id=arxiv_id,
+                level="error",
+            )
+            return False
+
+        try:
+            os.replace(temp_path, file_path)
+            record_arxiv_id(arxiv_id)
+        except Exception as e:
+            remove_file_if_exists(temp_path)
+            log(reporter, f"  [!] 保存 PDF 失败 {arxiv_id}: {e}", stage="hf-pdf", arxiv_id=arxiv_id, level="error")
+            return False
         emit(
             reporter,
             "download_done",
@@ -295,9 +331,23 @@ def download_arxiv_pdf(arxiv_id, title, dir_path, reporter=None):
             percent=100 if total else None,
         )
         return True
-    except Exception as e:
-        log(reporter, f"  [!] 下载失败 {arxiv_id}: {e}", stage="hf-pdf", arxiv_id=arxiv_id, level="error")
-        return False
+
+    return False
+
+
+def validate_downloaded_pdf(file_path):
+    with fitz.open(file_path) as document:
+        if document.page_count <= 0:
+            raise ValueError("PDF contains no pages")
+        for page_number in range(document.page_count):
+            document.load_page(page_number).get_text("text")
+
+
+def remove_file_if_exists(file_path):
+    try:
+        os.remove(file_path)
+    except FileNotFoundError:
+        pass
 
 def download_huggingface_daily_papers(reporter=None):
     log(reporter, "开始获取 HuggingFace Daily Papers...", stage="hf-list")
