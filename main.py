@@ -16,8 +16,52 @@ import fitz
 # 禁用安全请求警告
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+def _proxy_url(value):
+    value = value.strip()
+    return value if "://" in value else f"http://{value}"
+
+
+def get_system_proxies():
+    proxies = {
+        key.lower(): value
+        for key, value in urllib.request.getproxies().items()
+        if key.lower() in ("http", "https") and value
+    }
+    if proxies or os.name != "nt":
+        return proxies
+
+    # Some packaged Windows processes do not see the WinINet proxy through
+    # urllib, so read the same per-user setting directly as a fallback.
+    try:
+        import winreg
+
+        path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path) as key:
+            enabled, _ = winreg.QueryValueEx(key, "ProxyEnable")
+            server, _ = winreg.QueryValueEx(key, "ProxyServer")
+        if not enabled or not server:
+            return proxies
+
+        if "=" not in server:
+            url = _proxy_url(server)
+            return {"http": url, "https": url}
+
+        for item in server.split(";"):
+            if "=" not in item:
+                continue
+            scheme, value = item.split("=", 1)
+            scheme = scheme.strip().lower()
+            if scheme in ("http", "https") and value.strip():
+                proxies[scheme] = _proxy_url(value)
+        if "https" not in proxies and "http" in proxies:
+            proxies["https"] = proxies["http"]
+    except (OSError, ImportError):
+        pass
+    return proxies
+
+
 # 获取系统代理
-system_proxies = urllib.request.getproxies()
+system_proxies = get_system_proxies()
 
 # 配置会话
 session = requests.Session()
@@ -447,6 +491,11 @@ def build_today_kb(reporter=None):
         log(reporter, f"[!] KB build skipped: {e}", stage="kb-build", level="error")
 
 def run_main(data_root=None, reporter=None, build_index=True):
+    global system_proxies
+    system_proxies = get_system_proxies()
+    session.proxies.clear()
+    session.proxies.update(system_proxies)
+
     configure_runtime(data_root=data_root)
     log(reporter, f"正在使用的系统代理配置: {system_proxies}\n", stage="proxy")
 
